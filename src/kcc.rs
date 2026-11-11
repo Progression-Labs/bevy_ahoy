@@ -309,13 +309,51 @@ fn step_move(time: &Time, move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut Ct
     let down_position = ctx.transform.translation;
     let down_velocity = ctx.velocity.0;
 
-    ctx.transform.translation = original_position;
-    ctx.velocity.0 = original_velocity;
-    ctx.output.touching_entities = original_touching_entities;
+    // Step up. A full step's lift first; under a low lintel that lift raises the body into
+    // what the doorway leaves no room for, so the step is tried again at half the lift, and
+    // half again: a 3 cm sill in a 2 m doorway is stepped over at the lift that clears both.
+    let down = (down_position, down_velocity, down_touching_entities);
+    let down_dist = down.0.xz().distance_squared(original_position.xz());
+    let mut lift = ctx.cfg.step_size;
+    for _ in 0..STEP_LIFTS {
+        ctx.transform.translation = original_position;
+        ctx.velocity.0 = original_velocity;
+        ctx.output.touching_entities = original_touching_entities.clone();
+        if step_up(time, move_and_slide, ctx, lift, original_velocity) {
+            let up_dist = ctx
+                .transform
+                .translation
+                .xz()
+                .distance_squared(original_position.xz());
+            if up_dist > down_dist {
+                ctx.velocity.y = down.1.y;
+                ctx.state.last_step_up.reset();
+                return;
+            }
+        }
+        lift *= 0.5;
+    }
+    // No lift went further than the direct slide.
+    ctx.transform.translation = down.0;
+    ctx.velocity.0 = down.1;
+    ctx.output.touching_entities = down.2;
+}
 
-    // step up
+/// How many lifts a step is tried at: the full `step_size`, then halves of it.
+const STEP_LIFTS: usize = 4;
+
+/// One try at a step: up by `lift` (or to what is overhead), forward, down onto what is there.
+/// False when there is no room to stand ahead or nothing walkable to land on; the caller puts
+/// the body back.
+fn step_up(
+    time: &Time,
+    move_and_slide: &EnvironmentMoveAndSlide,
+    ctx: &mut CtxItem,
+    lift: f32,
+    original_velocity: Vec3,
+) -> bool {
     let cast_dir = Dir3::Y;
-    let cast_len = ctx.cfg.step_size;
+    let cast_len = lift;
 
     let hit = cast_move(cast_dir * cast_len, move_and_slide, ctx);
 
@@ -329,10 +367,7 @@ fn step_move(time: &Time, move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut Ct
         ctx,
     );
     if hit.is_some() {
-        ctx.transform.translation = down_position;
-        ctx.velocity.0 = down_velocity;
-        ctx.output.touching_entities = down_touching_entities;
-        return;
+        return false;
     }
 
     // try to slide from upstairs
@@ -359,30 +394,13 @@ fn step_move(time: &Time, move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut Ct
         }
     }
 
-    // If we either fall or slide down, use the direct move-and-slide instead
-    if !hit.is_some_and(|h| h.normal1.y >= ctx.cfg.min_walk_cos) {
-        ctx.transform.translation = down_position;
-        ctx.velocity.0 = down_velocity;
-        ctx.output.touching_entities = down_touching_entities;
-        return;
+    // If we either fall or slide down, the step is no step
+    let Some(hit) = hit.filter(|h| h.normal1.y >= ctx.cfg.min_walk_cos) else {
+        return false;
     };
-    let hit = hit.unwrap();
     ctx.transform.translation += cast_dir * hit.distance;
     depenetrate_character(move_and_slide, ctx);
-
-    let vec_up_pos = ctx.transform.translation;
-
-    // use the one that went further
-    let down_dist = down_position.xz().distance_squared(original_position.xz());
-    let up_dist = vec_up_pos.xz().distance_squared(original_position.xz());
-    if down_dist >= up_dist {
-        ctx.transform.translation = down_position;
-        ctx.velocity.0 = down_velocity;
-        ctx.output.touching_entities = down_touching_entities;
-    } else {
-        ctx.velocity.y = down_velocity.y;
-        ctx.state.last_step_up.reset();
-    }
+    true
 }
 
 fn handle_crane_movement(
