@@ -673,7 +673,10 @@ fn available_ledge_height(
         ctx.velocity.0 = original_velocity;
         return None;
     };
-    let ledge_height = up_dist - down_dist;
+    // The down cast stops a skin above the ledge. A body lifted exactly that far and cast
+    // forward grazes the ledge's edge within its skin, so the landing reads as blocked: lift it
+    // clear of the edge.
+    let ledge_height = up_dist - down_dist + 2.0 * ctx.cfg.move_and_slide.skin_width;
 
     // Okay, we found a potentially ledge!
     ctx.transform.translation = original_position;
