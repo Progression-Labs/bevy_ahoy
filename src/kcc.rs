@@ -914,7 +914,9 @@ fn handle_climbdown(
     let Some(last_movement) = ctx.input.last_movement else {
         return;
     };
-    if last_movement.y >= 0.0 {
+    // Backing off the edge, by the look. A character with no camera has no look to back away
+    // from: whoever feeds it asks for the climb down only when it is meant.
+    if ctx.cam.is_some() && last_movement.y >= 0.0 {
         return;
     }
     let Some(climbdown_time) = ctx.input.climbdown.clone() else {
@@ -923,13 +925,20 @@ fn handle_climbdown(
     if climbdown_time.elapsed() > ctx.cfg.mantle_input_buffer {
         return;
     }
+    let original_position = ctx.transform.translation;
+    // The tick the ground is lost, the body can still stand a skin's width over the edge it
+    // backed off: lowered from there it starts inside the wall, and the probe for the ledge
+    // reads nothing. Step clear of the edge first.
+    if let Ok(away) = Dir3::new(vec3(wish_velocity.x, 0.0, wish_velocity.z)) {
+        ctx.transform.translation += away * 2.0 * ctx.cfg.move_and_slide.skin_width;
+    }
     // step down
     let cast_dir = Dir3::NEG_Y;
     let cast_len = ctx.cfg.crane_height;
     if cast_move(cast_dir * cast_len, move_and_slide, ctx).is_some() {
+        ctx.transform.translation = original_position;
         return;
     };
-    let original_position = ctx.transform.translation;
     ctx.transform.translation += cast_dir * cast_len;
 
     let Some((mantle_state, mantle_output)) =
@@ -1261,7 +1270,10 @@ fn handle_tac(
     Some(tac_dir * groundedness * ctx.cfg.tac_power)
 }
 
-fn handle_ledge_jump_dir(ctx: &mut CtxItem) -> Option<Vec3> {
+fn handle_ledge_jump_dir(
+    move_and_slide: &EnvironmentMoveAndSlide,
+    ctx: &mut CtxItem,
+) -> Option<Vec3> {
     if ctx.state.mantle.is_none()
         || ctx
             .input
@@ -1272,9 +1284,27 @@ fn handle_ledge_jump_dir(ctx: &mut CtxItem) -> Option<Vec3> {
     {
         return None;
     }
-    let fwd = forward(ctx.state.orientation);
-    let flat_fwd = Dir3::new(vec3(fwd.x, 0.0, fwd.z)).ok()?;
-    let tac_dir = if ctx.input.last_movement.unwrap_or_default().y >= 0.0 {
+    // Up and over the ledge, or let go of it: by the look and the forward input with a camera,
+    // and without one by the move against the wall hung from (away from it lets go).
+    let wall = match ctx.cam {
+        None => closest_wall_normal(ctx.cfg.max_ledge_grab_distance, move_and_slide, ctx),
+        Some(_) => None,
+    };
+    let (flat_fwd, over) = match wall {
+        Some((_, normal)) => {
+            let into = Dir3::new(-vec3(normal.x, 0.0, normal.z)).ok()?;
+            let wish = calculate_wish_velocity(ctx);
+            (into, wish.dot(*into) >= -0.01)
+        }
+        None => {
+            let fwd = forward(ctx.state.orientation);
+            (
+                Dir3::new(vec3(fwd.x, 0.0, fwd.z)).ok()?,
+                ctx.input.last_movement.unwrap_or_default().y >= 0.0,
+            )
+        }
+    };
+    let tac_dir = if over {
         Dir3::new(Vec3::Y * ctx.cfg.ledge_jump_factor + *flat_fwd).ok()?
     } else {
         Dir3::NEG_Y
@@ -1295,7 +1325,7 @@ fn handle_jump(
         if ctx.state.grounded.is_none() && ctx.state.last_ground.elapsed() > ctx.cfg.coyote_time {
             if let Some(tac_dir) = handle_tac(wish_velocity, time, move_and_slide, ctx) {
                 tac_dir
-            } else if let Some(ledge_jump_dir) = handle_ledge_jump_dir(ctx) {
+            } else if let Some(ledge_jump_dir) = handle_ledge_jump_dir(move_and_slide, ctx) {
                 ledge_jump_dir
             } else {
                 return;
