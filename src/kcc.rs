@@ -88,6 +88,8 @@ fn run_kcc(
         ctx.state.last_tac.tick(time.delta());
         ctx.state.last_step_up.tick(time.delta());
         ctx.state.last_step_down.tick(time.delta());
+        ctx.state.last_wall_run.tick(time.delta());
+        ctx.state.last_ledge_jump.tick(time.delta());
 
         depenetrate_character(&move_and_slide, &mut ctx);
         update_grounded(&move_and_slide, &colliders, &time, &mut ctx);
@@ -525,7 +527,17 @@ fn handle_mantle_movement(
     }
 
     let climb_dir = Vec3::Y;
-    let wish_y = calc_climb_factor(ctx, wish_velocity, wall_normal);
+    // Along the wall more than into or out of it, the move is sideways and the hang keeps its
+    // height.
+    let along = wall_normal.cross(Vec3::Y).normalize_or_zero();
+    let flat_wish = vec3(wish_velocity.x, 0.0, wish_velocity.z).normalize_or_zero();
+    let aside = flat_wish.dot(along);
+    let sideways = ctx.cfg.shimmy_speed > 0.0
+        && aside.abs() > flat_wish.dot(vec3(wall_normal.x, 0.0, wall_normal.z)).abs();
+    let wish_y = match sideways {
+        true => 0.0,
+        false => calc_climb_factor(ctx, wish_velocity, wall_normal),
+    };
 
     let mut climb_dist =
         (ctx.cfg.mantle_speed * time.delta_secs() * wish_y).min(mantle_state.height_left);
@@ -545,6 +557,32 @@ fn handle_mantle_movement(
     ctx.velocity.0 -= ctx.state.platform_velocity;
 
     mantle_state.height_left -= travel_dist;
+    // Along the wall the hang goes sideways, for as long as there is ledge to hold there: a
+    // move past its end, or into a wall across it, stays where it is.
+    if sideways {
+        let (from, climbing) = (ctx.transform.translation, ctx.velocity.0);
+        ctx.velocity.0 = along * aside.signum() * ctx.cfg.shimmy_speed;
+        move_character(time, move_and_slide, ctx);
+        let shimmied = ctx.velocity.0;
+        // The ledge is looked for a body's half width further along: both hands are to have
+        // it, not the trailing one alone as the body rounds the wall's end.
+        let stepped = ctx.transform.translation;
+        ctx.transform.translation += along * aside.signum() * ctx.derived.radius(&ctx.state);
+        let ahead = available_mantle_height(-*wall_normal, time, move_and_slide, ctx);
+        ctx.transform.translation = stepped;
+        match ahead {
+            Some((there, _))
+                if (there.height_left - mantle_state.height_left).abs() < SHIMMY_STEP =>
+            {
+                mantle_state.height_left = there.height_left;
+                ctx.velocity.0 = climbing + shimmied;
+            }
+            _ => {
+                ctx.transform.translation = from;
+                ctx.velocity.0 = climbing;
+            }
+        }
+    }
     if climb_dist > 0.0 {
         ctx.state.last_step_up.reset();
     } else {
@@ -552,6 +590,10 @@ fn handle_mantle_movement(
     }
     ctx.state.mantle = Some(mantle_state);
 }
+
+/// How far a ledge's height may change under a hang going sideways along it (m): past that it
+/// is another ledge.
+const SHIMMY_STEP: f32 = 0.1;
 
 fn calc_climb_factor(ctx: &CtxItem, wish_velocity: Vec3, wall_normal: Dir3) -> f32 {
     // TODO: maybe do something smarter?
@@ -608,6 +650,32 @@ fn update_crane_state(
             .is_some()
             {
                 ctx.input.jumped = Some(Stopwatch::new());
+            } else if ctx.cfg.wall_run_height > 0.0 {
+                // Over a jump's reach, a ledge is still run up to by a character coming at its
+                // wall fast enough: its speed goes up the wall, and the jump is as high as the
+                // catch at the ledge needs.
+                let approach = match Dir3::new(vec3(wish_velocity.x, 0.0, wish_velocity.z)) {
+                    Ok(into) => ctx.velocity.0.dot(*into),
+                    Err(_) => 0.0,
+                };
+                if approach >= ctx.cfg.wall_run_speed
+                    && let Some(ledge) = available_ledge_height(
+                        wish_velocity,
+                        ctx.cfg.min_crane_ledge_space,
+                        ctx.cfg.min_crane_cos,
+                        reach + ctx.cfg.wall_run_height,
+                        time,
+                        move_and_slide,
+                        ctx,
+                    )
+                {
+                    let jump = (ledge - body + WALL_RUN_OVER).clamp(
+                        ctx.cfg.jump_height,
+                        ctx.cfg.jump_height + ctx.cfg.wall_run_height,
+                    );
+                    ctx.state.wall_run = Some(jump);
+                    ctx.input.jumped = Some(Stopwatch::new());
+                }
             }
         }
         return;
@@ -639,6 +707,10 @@ fn available_crane_height(
         ctx,
     )
 }
+
+/// How far past the height its hands need a run up a wall is aimed (m): the catch is made on
+/// the way up, not at the very top of the rise.
+const WALL_RUN_OVER: f32 = 0.25;
 
 /// How far over a ledge the room to land on it is looked for (m).
 const LANDING_CLEARANCE: f32 = 0.05;
@@ -769,6 +841,10 @@ fn update_mantle_state(
     if mantle_time.elapsed() > ctx.cfg.mantle_input_buffer {
         return;
     }
+    // A jump up off a ledge is on its way to the next: the one just left is not taken again.
+    if ctx.state.last_ledge_jump.elapsed() < ctx.cfg.ledge_jump_regrab {
+        return;
+    }
 
     let Some((mantle_state, mantle_output)) =
         available_mantle_height(wish_velocity, time, move_and_slide, ctx)
@@ -860,8 +936,10 @@ fn available_mantle_height(
     // Okay, we found a potential mantle!
     ctx.transform.translation = wall_pos;
 
-    // step up
-    ctx.transform.translation.y += ledge_height;
+    // step up, and a little over: hands cast forward at the very height the down cast stopped
+    // at graze the ledge's top somewhere along the cast now and then, and the ledge reads as
+    // having no room (a hang going along one found none every few steps).
+    ctx.transform.translation.y += ledge_height + LANDING_CLEARANCE;
 
     // check the full mantle
 
@@ -876,7 +954,7 @@ fn available_mantle_height(
     ctx.transform.translation += cast_dir * cast_len;
 
     let cast_dir = Dir3::NEG_Y;
-    let cast_len = ledge_height;
+    let cast_len = ledge_height + LANDING_CLEARANCE;
     let hit = cast_move_hands(cast_dir * cast_len, move_and_slide, ctx);
 
     // Reset KCC from speculative mantle to actual current state
@@ -1316,6 +1394,9 @@ fn handle_ledge_jump_dir(
         Dir3::NEG_Y
     };
     ctx.state.mantle = None;
+    if over {
+        ctx.state.last_ledge_jump.reset();
+    }
     Some(tac_dir * ctx.cfg.ledge_jump_power)
 }
 
@@ -1343,11 +1424,22 @@ fn handle_jump(
             if jump_time.elapsed() > ctx.cfg.jump_input_buffer {
                 return;
             }
+            if ctx.state.wall_run.is_none() {
+                ctx.state.wall_run = wall_run_ahead(wish_velocity, time, move_and_slide, ctx);
+            }
             set_grounded(None, colliders, time, ctx);
             // set last_ground to coyote time to make it not jump again after jumping ungrounds us
             ctx.state.last_ground.set_elapsed(ctx.cfg.coyote_time);
             Vec3::Y
         };
+    // A run up a wall is a jump as high as its ledge asks, and only the jump it was asked with.
+    let jump_height = match ctx.state.wall_run.take() {
+        Some(height) if jumpdir == Vec3::Y => {
+            ctx.state.last_wall_run.reset();
+            height
+        }
+        _ => ctx.cfg.jump_height,
+    };
     ctx.state.last_tac.reset();
 
     ctx.input.jumped = None;
@@ -1361,7 +1453,7 @@ fn handle_jump(
     // v = g * sqrt(2.0 * 45 / g )
     // v^2 = g * g * 2.0 * 45 / g
     // v = sqrt( g * 2.0 * 45 )
-    let fl_mul = (2.0 * ctx.cfg.gravity * ctx.cfg.jump_height).sqrt();
+    let fl_mul = (2.0 * ctx.cfg.gravity * jump_height).sqrt();
     ctx.velocity.0 += jumpdir * ground_factor * fl_mul + Vec3::Y * ctx.state.platform_velocity.y;
     if let Some(crane_input) = ctx.input.craned.as_mut() {
         crane_input
@@ -1369,6 +1461,54 @@ fn handle_jump(
     }
 
     // TODO: Trigger jump event
+}
+
+/// How far ahead of a jump a wall is still run up (m): the last strides of the run.
+const WALL_RUN_AHEAD: f32 = 2.0;
+
+/// The jump a character leaving the ground makes at a wall ahead whose ledge is over a jump's
+/// reach and within a wall run's, coming at it fast enough: as high as the catch at the ledge
+/// needs.
+fn wall_run_ahead(
+    wish_velocity: Vec3,
+    time: &Time,
+    move_and_slide: &EnvironmentMoveAndSlide,
+    ctx: &mut CtxItem,
+) -> Option<f32> {
+    if ctx.cfg.wall_run_height <= 0.0 {
+        return None;
+    }
+    let into = Dir3::new(vec3(wish_velocity.x, 0.0, wish_velocity.z)).ok()?;
+    if ctx.velocity.0.dot(*into) < ctx.cfg.wall_run_speed {
+        return None;
+    }
+    let wall = cast_move(into * WALL_RUN_AHEAD, move_and_slide, ctx)?;
+    let body = ctx.derived.pos_to_head_dist(&ctx.state) - ctx.derived.pos_to_feet_dist(&ctx.state);
+    let reach = ctx.cfg.jump_height + body;
+    let from = ctx.transform.translation;
+    ctx.transform.translation += into * wall.distance;
+    let ledge = |ctx: &mut CtxItem, height: f32| {
+        available_ledge_height(
+            wish_velocity,
+            ctx.cfg.min_crane_ledge_space,
+            ctx.cfg.min_crane_cos,
+            height,
+            time,
+            move_and_slide,
+            ctx,
+        )
+    };
+    let jump = match ledge(ctx, reach) {
+        Some(_) => None,
+        None => ledge(ctx, reach + ctx.cfg.wall_run_height).map(|ledge| {
+            (ledge - body + WALL_RUN_OVER).clamp(
+                ctx.cfg.jump_height,
+                ctx.cfg.jump_height + ctx.cfg.wall_run_height,
+            )
+        }),
+    };
+    ctx.transform.translation = from;
+    jump
 }
 
 fn start_gravity(time: &Time, ctx: &mut CtxItem) {

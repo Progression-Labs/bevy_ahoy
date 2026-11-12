@@ -193,6 +193,19 @@ pub struct CharacterController {
     pub max_ledge_grab_distance: f32,
     pub climb_reverse_sin: f32,
     pub climb_sensitivity: f32,
+    /// How fast a hanging character goes sideways along its ledge (m/s): its move along the wall
+    /// takes it hand over hand while the ledge goes on. Zero keeps a hang where it is.
+    pub shimmy_speed: f32,
+    /// How much higher than a jump a run at a wall takes a character (m): the steps it takes up
+    /// the wall. A crane held at a wall whose ledge is over a jump's reach but within this much
+    /// more is run up to, when the character comes at it at [`Self::wall_run_speed`] or faster.
+    /// Zero is no wall run.
+    pub wall_run_height: f32,
+    /// The slowest approach, into the wall, a wall run is made from (m/s).
+    pub wall_run_speed: f32,
+    /// How long after a jump up off a ledge no ledge is taken hold of: the rise that carries
+    /// the hands past the one just left, to the next hold up. Zero takes hold at once.
+    pub ledge_jump_regrab: Duration,
 }
 
 impl Default for CharacterController {
@@ -252,6 +265,10 @@ impl Default for CharacterController {
             max_ledge_grab_distance: 0.3,
             climb_reverse_sin: 40.0_f32.to_radians().sin(),
             climb_sensitivity: 2.5,
+            shimmy_speed: 0.0,
+            wall_run_height: 0.0,
+            wall_run_speed: 0.0,
+            ledge_jump_regrab: Duration::ZERO,
         }
     }
 }
@@ -343,6 +360,12 @@ pub struct CharacterControllerState {
     pub last_step_up: Stopwatch,
     pub last_step_down: Stopwatch,
     pub crane_height_left: Option<f32>,
+    /// A run up a wall is asked for: how high the jump at it goes (m), taken by the jump.
+    pub wall_run: Option<f32>,
+    /// Since the last run up a wall left the ground.
+    pub last_wall_run: Stopwatch,
+    /// Since the last jump up off a ledge.
+    pub last_ledge_jump: Stopwatch,
     /// The current state of the mantle, if a mantle is in progress.
     ///
     /// This is [`None`] if a mantle is not in progress.
@@ -363,6 +386,9 @@ impl Default for CharacterControllerState {
             last_step_up: max_stopwatch(),
             last_step_down: max_stopwatch(),
             crane_height_left: None,
+            wall_run: None,
+            last_wall_run: max_stopwatch(),
+            last_ledge_jump: max_stopwatch(),
             mantle: None,
         }
     }
