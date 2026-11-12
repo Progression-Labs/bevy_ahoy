@@ -640,6 +640,9 @@ fn available_crane_height(
     )
 }
 
+/// How far over a ledge the room to land on it is looked for (m).
+const LANDING_CLEARANCE: f32 = 0.05;
+
 fn available_ledge_height(
     wish_velocity: Vec3,
     min_depth: f32,
@@ -711,8 +714,11 @@ fn available_ledge_height(
     // Okay, we found a potentially ledge!
     ctx.transform.translation = original_position;
 
-    // step up
-    ctx.transform.translation.y += ledge_height;
+    // step up, and a little over: a body cast forward two skins above the ledge still grazes
+    // its top somewhere along the cast about one time in two (a hit 0.17 m in, its normal the
+    // ledge's own), and a body hanging still under the ledge then hangs there for good, since
+    // nothing changes for the next try. The room to land is looked for clear of the surface.
+    ctx.transform.translation.y += ledge_height + LANDING_CLEARANCE;
 
     // check the full climb
 
@@ -727,7 +733,7 @@ fn available_ledge_height(
     ctx.transform.translation += cast_dir * cast_len;
 
     let cast_dir = Dir3::NEG_Y;
-    let cast_len = ledge_height;
+    let cast_len = ledge_height + LANDING_CLEARANCE;
     let hit = cast_move(cast_dir * cast_len, move_and_slide, ctx);
 
     // Reset KCC from speculative climb to actual current state
