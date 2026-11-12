@@ -524,7 +524,7 @@ fn handle_mantle_movement(
     }
 
     let climb_dir = Vec3::Y;
-    let wish_y = calc_climb_factor(ctx, wish_velocity);
+    let wish_y = calc_climb_factor(ctx, wish_velocity, wall_normal);
 
     let mut climb_dist =
         (ctx.cfg.mantle_speed * time.delta_secs() * wish_y).min(mantle_state.height_left);
@@ -552,10 +552,18 @@ fn handle_mantle_movement(
     ctx.state.mantle = Some(mantle_state);
 }
 
-fn calc_climb_factor(ctx: &CtxItem, wish_velocity: Vec3) -> f32 {
+fn calc_climb_factor(ctx: &CtxItem, wish_velocity: Vec3, wall_normal: Dir3) -> f32 {
     // TODO: maybe do something smarter?
     if wish_velocity.length_squared() < 0.01 {
         return 0.0;
+    }
+    // A character with no camera has no look to pitch up or down the wall, and its orientation
+    // need not follow its travel (a third-person body under a fixed capsule): the move itself
+    // says which way. Into the wall is up, away from it down, along it neither.
+    if ctx.cam.is_none() {
+        let flat = vec3(wish_velocity.x, 0.0, wish_velocity.z).normalize_or_zero();
+        let wall = vec3(wall_normal.x, 0.0, wall_normal.z).normalize_or_zero();
+        return (flat.dot(-wall) * ctx.cfg.climb_sensitivity).clamp(-1.0, 1.0);
     }
     // positive when looking at the wall or above it, negative when looking down
     let movement = ctx.input.last_movement.unwrap_or_default().y;
