@@ -5,6 +5,7 @@ use bevy_ecs::{
     schedule::ScheduleLabel,
     system::lifetimeless::{Read, Write},
 };
+use bevy_time::Stopwatch;
 use core::fmt::Debug;
 use core::time::Duration;
 use tracing::warn;
@@ -588,6 +589,27 @@ fn update_crane_state(
     let Some(crane_height) = available_crane_height(wish_velocity, time, move_and_slide, ctx)
     else {
         ctx.state.crane_height_left = None;
+        // A ledge over the crane's reach that a jump and the catch at its top still get to is
+        // jumped at: whoever holds "up" at a wall means to go up it. A wall with no ledge in
+        // reach is left alone, so holding the crane at one does not bounce.
+        if ctx.state.grounded.is_some() && ctx.input.jumped.is_none() {
+            let body =
+                ctx.derived.pos_to_head_dist(&ctx.state) - ctx.derived.pos_to_feet_dist(&ctx.state);
+            let reach = ctx.cfg.jump_height + body;
+            if available_ledge_height(
+                wish_velocity,
+                ctx.cfg.min_crane_ledge_space,
+                ctx.cfg.min_crane_cos,
+                reach,
+                time,
+                move_and_slide,
+                ctx,
+            )
+            .is_some()
+            {
+                ctx.input.jumped = Some(Stopwatch::new());
+            }
+        }
         return;
     };
 
