@@ -537,11 +537,14 @@ fn step_move(time: &Time, move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut Ct
     let down = (down_position, down_velocity, down_touching_entities);
     let down_dist = down.0.xz().distance_squared(original_position.xz());
     let mut lift = ctx.cfg.step_size;
+    let mut stepable = false;
     for _ in 0..STEP_LIFTS {
         ctx.transform.translation = original_position;
         ctx.velocity.0 = original_velocity;
         ctx.output.touching_entities = original_touching_entities.clone();
-        if step_up(time, move_and_slide, ctx, lift, original_velocity) {
+        let ok = step_up(time, move_and_slide, ctx, lift, original_velocity);
+        stepable |= ok;
+        if ok {
             let up_dist = ctx
                 .transform
                 .translation
@@ -559,6 +562,15 @@ fn step_move(time: &Time, move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut Ct
     ctx.transform.translation = down.0;
     ctx.velocity.0 = down.1;
     ctx.output.touching_entities = down.2;
+    if stepable {
+        // A riser under a lift that has room to stand past it and walkable ground under the
+        // lifted body, met this tick short of carrying the soles over its edge (the lifted body
+        // came down on the floor it left): the tick ends at its face, and the move keeps its
+        // speed to step up it the next. The slide had spent the move's speed into the face as
+        // into a wall, and the run started again from rest at every riser it met that way.
+        ctx.velocity.x = original_velocity.x;
+        ctx.velocity.z = original_velocity.z;
+    }
 }
 
 /// How many lifts a step is tried at: the full `step_size`, then halves of it.
