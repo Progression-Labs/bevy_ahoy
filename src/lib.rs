@@ -410,9 +410,8 @@ pub struct CharacterControllerState {
     /// How long a move has been held at an edge over a drop deeper than
     /// [`CharacterController::safe_drop`], if it is.
     pub edge_held: Option<Duration>,
-    /// The ground velocity the character had as it was first held at an edge: a jump within
-    /// [`CharacterController::coyote_time`] of that leaves with it, so a press a frame late at a
-    /// run's take-off still leaps.
+    /// The ground velocity the character had as it was first held at an edge: a jump while the
+    /// hold goes on leaves with it, so a press late at a run's take-off still leaps.
     pub edge_velocity: Vec3,
     /// A move held into a drop long enough to go over it: it walks off on its next moves, and
     /// climbs down as it leaves the ground.

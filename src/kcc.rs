@@ -1689,12 +1689,10 @@ fn handle_jump(
             if ctx.state.wall_run.is_none() {
                 ctx.state.wall_run = wall_run_ahead(wish_velocity, time, move_and_slide, ctx);
             }
-            // Held at an edge a moment ago: the jump leaves with the run it was making.
-            if ctx
-                .state
-                .edge_held
-                .is_some_and(|held| held <= ctx.cfg.coyote_time)
-            {
+            // Held at an edge: the jump leaves with the run it was making, however long into
+            // the hold it is pressed (the hold has turned the move along the edge and slowed
+            // it, and a jump 8 frames in left with that and fell short of a 1.5 m gap).
+            if ctx.state.edge_held.is_some() {
                 let run = ctx.state.edge_velocity + ctx.state.platform_velocity;
                 ctx.velocity.x = run.x;
                 ctx.velocity.z = run.z;
