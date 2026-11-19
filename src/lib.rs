@@ -127,18 +127,26 @@ pub struct Frozen;
 
 /// A character carried along a path by whoever moves it (a vault over a rail, a slide down a
 /// line, a body that walks itself and takes its capsule along): each tick the controller sweeps
-/// it by [`Carried::delta`] through move-and-slide against its environment, as it does its own
-/// moves, and clears the delta. Nothing else moves it meanwhile: no gravity, input, step or
-/// climb. So a carry never puts the capsule inside anything: what it meets stops it, and what
-/// was left of the delta is [`Carried::blocked`].
+/// it to [`Carried::to`] through move-and-slide against its environment, as it does its own
+/// moves, and clears it. Nothing else moves it meanwhile: no gravity, input, step or
+/// climb, but a step up a riser it meets when it [`Carried::steps`]. So a carry never puts the capsule
+/// inside anything: what it meets stops it, and what was left of the delta is
+/// [`Carried::blocked`].
 #[derive(Component, Clone, Copy, Default, Reflect, Debug)]
 #[reflect(Component, Default)]
 pub struct Carried {
-    /// The displacement still to make, in the character's parent's frame (m): set it each
-    /// frame to where the carry has the capsule next, less where the capsule is.
-    pub delta: Vec3,
-    /// What of the last delta the sweep could not make (m): zero when nothing was in the way.
+    /// Where the carry has the character next, in its parent's frame: the next tick sweeps it
+    /// there from where it is (its own place, not the Transform avian eases for the eye between
+    /// ticks) and clears it. `Some` is a step not made yet.
+    pub to: Option<Vec3>,
+    /// Whether a riser the sweep stops against is stepped up, as a walk takes it (a body that
+    /// walks itself); a vault or a slide is stopped by it.
+    pub steps: bool,
+    /// What of the last step the sweep could not make (m): zero when nothing was in the way.
     pub blocked: Vec3,
+    /// Whether the last sweep was stopped: short of its step by more than a sweep's own skin
+    /// leaves it. Whoever carries the character ends the move there.
+    pub stopped: bool,
     /// Whether the character stands on walkable ground after the last sweep.
     pub grounded: bool,
 }

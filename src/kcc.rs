@@ -93,7 +93,10 @@ fn run_kcc(
         ctx.state.last_ledge_jump.tick(time.delta());
 
         depenetrate_character(&move_and_slide, &mut ctx);
-        if let Some(delta) = ctx.carried.as_ref().map(|c| c.delta) {
+        if let Some(carried) = ctx.carried.as_ref() {
+            let delta = carried
+                .to
+                .map_or(Vec3::ZERO, |to| to - ctx.transform.translation);
             carry(delta, &time, &move_and_slide, &colliders, &mut ctx);
             continue;
         }
@@ -167,7 +170,10 @@ fn run_kcc(
     }
 }
 
-/// A carried character's tick: swept by `delta` through move-and-slide, nothing else.
+/// A carried character's tick: swept by `delta` through move-and-slide, nothing else. Where
+/// the sweep stops against a riser no taller than [`CharacterController::step_size`] and the
+/// carry [`Carried::steps`], it steps up it, as a walk does: a body that walks itself and takes
+/// its capsule along goes up a kerb.
 fn carry(
     delta: Vec3,
     time: &Time,
@@ -181,21 +187,17 @@ fn carry(
     ctx.state.edge_held = None;
     let from = ctx.transform.translation;
     if delta != Vec3::ZERO {
-        let out = move_and_slide.move_and_slide(
-            ctx.derived.collider(&ctx.state),
-            from,
-            ctx.transform.rotation,
-            delta / dt,
-            time.delta(),
-            &ctx.cfg.move_and_slide,
-            &ctx.cfg.filter,
-            |hit| {
-                ctx.output.touching_entities.push(hit.into());
-                MoveAndSlideHitResponse::Accept
-            },
-        );
-        ctx.transform.translation = out.position;
-        depenetrate_character(move_and_slide, ctx);
+        sweep(delta, time, move_and_slide, ctx);
+        let short = (delta - (ctx.transform.translation - from)).with_y(0.0);
+        let steps = ctx.carried.as_ref().is_some_and(|c| c.steps);
+        if steps && short.length() > ctx.cfg.move_and_slide.skin_width {
+            let direct = ctx.transform.translation;
+            if !carry_step(from, delta.with_y(0.0), time, move_and_slide, ctx)
+                || (ctx.transform.translation - from).xz().length() <= (direct - from).xz().length()
+            {
+                ctx.transform.translation = direct;
+            }
+        }
     }
     let moved = ctx.transform.translation - from;
     ctx.velocity.0 = moved / dt;
@@ -204,11 +206,75 @@ fn carry(
         ctx.state.last_ground.reset();
     }
     let grounded = ctx.state.grounded.is_some();
+    let stopped =
+        (delta - moved).length() > CARRY_STOPPED_SKINS * ctx.cfg.move_and_slide.skin_width;
     if let Some(carried) = ctx.carried.as_mut() {
-        carried.delta = Vec3::ZERO;
+        carried.to = None;
         carried.blocked = delta - moved;
+        carried.stopped = stopped;
         carried.grounded = grounded;
     }
+}
+
+/// How many skin widths short of its delta a carry is to be [`Carried::stopped`]: a sweep
+/// ends a skin off what it meets, and slides that much along it.
+const CARRY_STOPPED_SKINS: f32 = 3.0;
+
+/// The character swept by `movement` through move-and-slide, depenetrated.
+fn sweep(movement: Vec3, time: &Time, move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut CtxItem) {
+    let dt = time.delta_secs().max(1.0e-6);
+    let out = move_and_slide.move_and_slide(
+        ctx.derived.collider(&ctx.state),
+        ctx.transform.translation,
+        ctx.transform.rotation,
+        movement / dt,
+        time.delta(),
+        &ctx.cfg.move_and_slide,
+        &ctx.cfg.filter,
+        |hit| {
+            ctx.output.touching_entities.push(hit.into());
+            MoveAndSlideHitResponse::Accept
+        },
+    );
+    ctx.transform.translation = out.position;
+    depenetrate_character(move_and_slide, ctx);
+}
+
+/// A carry's step: from `from`, up by the step (or what is overhead), along `flat`, and down onto
+/// a walkable top within the lift. False, the character anywhere, when there is none.
+fn carry_step(
+    from: Vec3,
+    flat: Vec3,
+    time: &Time,
+    move_and_slide: &EnvironmentMoveAndSlide,
+    ctx: &mut CtxItem,
+) -> bool {
+    ctx.transform.translation = from;
+    let lift = cast_move(Vec3::Y * ctx.cfg.step_size, move_and_slide, ctx)
+        .map_or(ctx.cfg.step_size, |hit| hit.distance);
+    ctx.transform.translation += Vec3::Y * lift;
+    sweep(flat, time, move_and_slide, ctx);
+    let walkable = |hit: &MoveHitData| hit.normal1.y >= ctx.cfg.min_walk_cos;
+    let mut down = cast_move(Vec3::NEG_Y * lift, move_and_slide, ctx);
+    // A frame's carry at a walk takes the capsule only onto the riser's edge (a slanted
+    // contact): onto its top a little further on, as a walk's step does.
+    if !down.as_ref().is_some_and(walkable) {
+        let ahead = flat.normalize_or_zero() * ctx.cfg.min_step_ledge_space * 0.5;
+        let here = ctx.transform.translation;
+        ctx.transform.translation += ahead;
+        let top = cast_move(Vec3::NEG_Y * lift, move_and_slide, ctx);
+        if top.as_ref().is_some_and(walkable) {
+            down = top;
+        } else {
+            ctx.transform.translation = here;
+        }
+    }
+    let Some(down) = down.filter(walkable) else {
+        return false;
+    };
+    ctx.transform.translation += Vec3::NEG_Y * down.distance;
+    depenetrate_character(move_and_slide, ctx);
+    true
 }
 
 fn depenetrate_character(move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut CtxItem) {
