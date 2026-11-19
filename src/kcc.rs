@@ -747,7 +747,6 @@ fn handle_crane_movement(
             ctx.transform.translation += cast_dir * speed * time.delta_secs();
             depenetrate_character(move_and_slide, ctx);
             ctx.state.crane_height_left = None;
-            stand_after_crane(move_and_slide, ctx);
         }
         return;
     }
@@ -761,41 +760,6 @@ fn handle_crane_movement(
     ctx.transform.translation += cast_dir * speed * time.delta_secs();
     depenetrate_character(move_and_slide, ctx);
     ctx.state.crane_height_left = None;
-    stand_after_crane(move_and_slide, ctx);
-}
-
-/// A climb over a ledge that ends standing on it ends at rest there: the planar speed its wish
-/// built while the lift held it at the wall is not a run it was making (after a pull up from a
-/// hang the capsule slid 0.4 m on over the roof with nothing pressed, ahead of the body standing
-/// up), and a run on starts from rest. One that ends on the ledge's lip, the middle of its soles
-/// still over the wall, keeps its speed to step on (stopped there, it fell back down the face).
-/// A run going over an obstacle keeps its own speed.
-fn stand_after_crane(move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut CtxItem) {
-    if ctx.state.run_over.is_some() || std::env::var_os("NO_STAND").is_some() {
-        return;
-    }
-    const PROBE: f32 = 0.05;
-    let collider = ctx.derived.collider(&ctx.state);
-    let aabb = collider.aabb(Vec3::ZERO, Rotation::default(), 0.0);
-    let soles = ctx.transform.translation + Vec3::Y * (aabb.min.y + PROBE);
-    let on_top = move_and_slide
-        .cast_move(
-            &Collider::sphere(PROBE),
-            soles,
-            Quat::IDENTITY,
-            Vec3::NEG_Y * (ctx.cfg.step_size + 2.0 * ctx.cfg.move_and_slide.skin_width),
-            ctx.cfg.move_and_slide.skin_width,
-            &ctx.cfg.filter,
-        )
-        .is_some();
-    if std::env::var_os("AHOY_TRACE").is_some() {
-        eprintln!("STAND at {:?} v {:?} on_top {on_top}", ctx.transform.translation, ctx.velocity.0);
-    }
-    if on_top {
-        let platform = ctx.state.platform_velocity;
-        ctx.velocity.x = platform.x;
-        ctx.velocity.z = platform.z;
-    }
 }
 
 fn handle_mantle_movement(
@@ -1012,17 +976,29 @@ fn update_crane_state(
         .craned
         .as_ref()
         .is_some_and(|t| t.elapsed() <= ctx.cfg.crane_input_buffer);
-    if !asked && !catching(ctx) {
+    if !asked {
+        // Unasked, a ledge is only ever taken: a climb in progress is left to go on, and a
+        // ledge out of the jump's reach changes nothing (a refused catch had ended the pull up
+        // it met in progress, and the body's climb up a 3 m wall stepped its root 23 cm).
+        if !catching(ctx) || ctx.state.crane_height_left.is_some() || ctx.state.mantle.is_some() {
+            return;
+        }
+        let Some(height) = available_crane_height(wish_velocity, time, move_and_slide, ctx) else {
+            return;
+        };
+        let soles = ctx.transform.translation.y + ctx.derived.pos_to_feet_dist(&ctx.state);
+        if !within_jump(
+            ctx,
+            soles + height - 2.0 * ctx.cfg.move_and_slide.skin_width,
+        ) {
+            return;
+        }
+        take_crane(height, ctx);
         return;
     }
 
-    let crane = available_crane_height(wish_velocity, time, move_and_slide, ctx).filter(|h| {
-        asked || {
-            let soles = ctx.transform.translation.y + ctx.derived.pos_to_feet_dist(&ctx.state);
-            within_jump(ctx, soles + h - 2.0 * ctx.cfg.move_and_slide.skin_width)
-        }
-    });
-    let Some(crane_height) = crane else {
+    let Some(crane_height) = available_crane_height(wish_velocity, time, move_and_slide, ctx)
+    else {
         ctx.state.crane_height_left = None;
         // A ledge over the crane's reach that a jump and the catch at its top still get to is
         // jumped at: whoever holds "up" at a wall means to go up it. A wall with no ledge in
@@ -1074,6 +1050,11 @@ fn update_crane_state(
         return;
     };
 
+    take_crane(crane_height, ctx);
+}
+
+/// A crane over a ledge `height` up begins.
+fn take_crane(height: f32, ctx: &mut CtxItem) {
     ctx.input.craned = None;
     // Ensure we don't immediately jump on the surface if crane and jump are bound to the same key
     ctx.input.jumped = None;
@@ -1081,7 +1062,7 @@ fn update_crane_state(
     ctx.input.tac = None;
 
     ctx.state.mantle = None;
-    ctx.state.crane_height_left = Some(crane_height);
+    ctx.state.crane_height_left = Some(height);
 }
 
 fn available_crane_height(
