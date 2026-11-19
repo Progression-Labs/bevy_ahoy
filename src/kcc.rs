@@ -957,7 +957,7 @@ fn update_run_over(
     // Onto a top the body stands on: its whole footprint on past the face, at about the top's
     // height. The ledge check asks for less room than a body is wide, and over a rail with a
     // wall half a metre behind it the run went over and down into the slot.
-    if !top_to_stand_on(into, wall.distance, height, move_and_slide, ctx) {
+    if !top_to_stand_on(into, wall.distance, move_and_slide, ctx) {
         return;
     }
     // Up by the time the run has come to the face: at least a tick's worth of the run.
@@ -971,38 +971,50 @@ fn update_run_over(
     ctx.input.tac = None;
 }
 
-/// Whether there is a top to stand on `height` up past a face `to_face` ahead along `into`: the
-/// body lifted clear of it and moved on by the face and its own footprint has room there, with
-/// walkable ground within the step of that height under the middle of its soles.
+/// Whether there is a top to stand on past a face `to_face` ahead along `into`, over the step and
+/// at most [`CharacterController::run_over_height`] up: the body lifted to that height and moved
+/// on by the face and its own footprint has room there, and the top under the middle of its soles
+/// is walkable and in that window. Read off the top itself: the ledge check's height can run over
+/// the cap (a 0.75 m wall was run over at a 0.7 m cap) and its landing reach can find the floor
+/// past a thin rail.
 fn top_to_stand_on(
     into: Dir3,
     to_face: f32,
-    height: f32,
     move_and_slide: &EnvironmentMoveAndSlide,
     ctx: &mut CtxItem,
 ) -> bool {
+    const PROBE: f32 = 0.05;
     let original = ctx.transform.translation;
     let collider = ctx.derived.collider(&ctx.state);
     let aabb = collider.aabb(Vec3::ZERO, Rotation::default(), 0.0);
     let footprint = (aabb.max.x - aabb.min.x).max(aabb.max.z - aabb.min.z);
-    let lift = height + LANDING_CLEARANCE;
+    let skin = ctx.cfg.move_and_slide.skin_width;
+    let lift = ctx.cfg.run_over_height + LANDING_CLEARANCE;
     ctx.transform.translation.y += lift;
     let on = *into * (to_face + footprint);
     let clear = cast_move(on, move_and_slide, ctx).is_none();
     ctx.transform.translation += on;
     // Under the middle of the soles there, as the edge hold measures standing.
-    const PROBE: f32 = 0.05;
     let soles = ctx.transform.translation + Vec3::Y * (aabb.min.y + PROBE);
     ctx.transform.translation = original;
-    let down = move_and_slide.cast_move(
+    if !clear {
+        return false;
+    }
+    let Some(hit) = move_and_slide.cast_move(
         &Collider::sphere(PROBE),
         soles,
         Quat::IDENTITY,
-        Vec3::NEG_Y * (LANDING_CLEARANCE + ctx.cfg.step_size),
-        ctx.cfg.move_and_slide.skin_width,
+        Vec3::NEG_Y * lift,
+        skin,
         &ctx.cfg.filter,
-    );
-    clear && down.is_some_and(|hit| hit.normal1.y >= ctx.cfg.min_walk_cos)
+    ) else {
+        return false;
+    };
+    // How high the top is over the soles where they ride now (the probe stops a skin short).
+    let top = lift - hit.distance - skin;
+    hit.normal1.y >= ctx.cfg.min_walk_cos
+        && top > ctx.cfg.step_size - skin
+        && top <= ctx.cfg.run_over_height
 }
 
 fn update_crane_state(
