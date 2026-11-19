@@ -35,6 +35,7 @@ struct Ctx {
     cfg: Read<CharacterController>,
     water: Read<WaterState>,
     cam: Option<Read<CharacterControllerCamera>>,
+    carried: Option<Write<Carried>>,
 }
 
 #[derive(QueryData)]
@@ -92,6 +93,10 @@ fn run_kcc(
         ctx.state.last_ledge_jump.tick(time.delta());
 
         depenetrate_character(&move_and_slide, &mut ctx);
+        if let Some(delta) = ctx.carried.as_ref().map(|c| c.delta) {
+            carry(delta, &time, &move_and_slide, &colliders, &mut ctx);
+            continue;
+        }
         update_grounded(&move_and_slide, &colliders, &time, &mut ctx);
 
         handle_crouching(&move_and_slide, &waters, &mut ctx);
@@ -159,6 +164,50 @@ fn run_kcc(
             ctx.state.edge_released = false;
         }
         // TODO: check_falling();
+    }
+}
+
+/// A carried character's tick: swept by `delta` through move-and-slide, nothing else.
+fn carry(
+    delta: Vec3,
+    time: &Time,
+    move_and_slide: &EnvironmentMoveAndSlide,
+    colliders: &Query<ColliderComponents>,
+    ctx: &mut CtxItem,
+) {
+    let dt = time.delta_secs().max(1.0e-6);
+    ctx.state.mantle = None;
+    ctx.state.crane_height_left = None;
+    ctx.state.edge_held = None;
+    let from = ctx.transform.translation;
+    if delta != Vec3::ZERO {
+        let out = move_and_slide.move_and_slide(
+            ctx.derived.collider(&ctx.state),
+            from,
+            ctx.transform.rotation,
+            delta / dt,
+            time.delta(),
+            &ctx.cfg.move_and_slide,
+            &ctx.cfg.filter,
+            |hit| {
+                ctx.output.touching_entities.push(hit.into());
+                MoveAndSlideHitResponse::Accept
+            },
+        );
+        ctx.transform.translation = out.position;
+        depenetrate_character(move_and_slide, ctx);
+    }
+    let moved = ctx.transform.translation - from;
+    ctx.velocity.0 = moved / dt;
+    update_grounded(move_and_slide, colliders, time, ctx);
+    if ctx.state.grounded.is_some() {
+        ctx.state.last_ground.reset();
+    }
+    let grounded = ctx.state.grounded.is_some();
+    if let Some(carried) = ctx.carried.as_mut() {
+        carried.delta = Vec3::ZERO;
+        carried.blocked = delta - moved;
+        carried.grounded = grounded;
     }
 }
 

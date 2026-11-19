@@ -17,7 +17,7 @@ pub mod prelude {
     };
 
     pub use crate::{
-        AhoyPlugin, AhoySystems, CharacterController, Frozen,
+        AhoyPlugin, AhoySystems, Carried, CharacterController, Frozen,
         camera::{CharacterControllerCamera, CharacterControllerCameraOf},
         input::{
             Climbdown, Crane, Crouch, GlobalMovement, Jump, Mantle, Movement, RotateCamera, SwimUp,
@@ -124,6 +124,24 @@ pub enum AhoySystems {
 #[derive(Component, Clone, Copy, Default, Reflect, Debug)]
 #[reflect(Component, Default)]
 pub struct Frozen;
+
+/// A character carried along a path by whoever moves it (a vault over a rail, a slide down a
+/// line, a body that walks itself and takes its capsule along): each tick the controller sweeps
+/// it by [`Carried::delta`] through move-and-slide against its environment, as it does its own
+/// moves, and clears the delta. Nothing else moves it meanwhile: no gravity, input, step or
+/// climb. So a carry never puts the capsule inside anything: what it meets stops it, and what
+/// was left of the delta is [`Carried::blocked`].
+#[derive(Component, Clone, Copy, Default, Reflect, Debug)]
+#[reflect(Component, Default)]
+pub struct Carried {
+    /// The displacement still to make, in the character's parent's frame (m): set it each
+    /// frame to where the carry has the capsule next, less where the capsule is.
+    pub delta: Vec3,
+    /// What of the last delta the sweep could not make (m): zero when nothing was in the way.
+    pub blocked: Vec3,
+    /// Whether the character stands on walkable ground after the last sweep.
+    pub grounded: bool,
+}
 
 #[derive(Component, Clone, Reflect, Debug)]
 #[reflect(Component)]
