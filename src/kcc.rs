@@ -154,6 +154,9 @@ fn run_kcc(
         if ctx.state.grounded.is_some() {
             ctx.velocity.y = ctx.state.platform_velocity.y;
             ctx.state.last_ground.reset();
+        } else {
+            ctx.state.edge_held = None;
+            ctx.state.edge_released = false;
         }
         // TODO: check_falling();
     }
@@ -192,6 +195,19 @@ fn ground_move(
     let mut movement = ctx.velocity.0 * time.delta_secs();
     movement.y = 0.0;
 
+    let kept = keep_off_edge(movement, time, move_and_slide, ctx);
+    if kept != movement {
+        let dt = time.delta_secs().max(1.0e-6);
+        ctx.velocity.x = kept.x / dt;
+        ctx.velocity.z = kept.z / dt;
+        movement = kept;
+        if movement.length_squared() < 1.0e-10 {
+            ctx.velocity.0 -= ctx.state.platform_velocity;
+            snap_to_ground(move_and_slide, ctx);
+            return;
+        }
+    }
+
     let hit = cast_move(movement, move_and_slide, ctx);
 
     if hit.is_none() {
@@ -206,6 +222,94 @@ fn ground_move(
 
     ctx.velocity.0 -= ctx.state.platform_velocity;
     snap_to_ground(move_and_slide, ctx);
+}
+
+/// A ground move of `movement` that would leave the character over a drop deeper than
+/// [`CharacterController::safe_drop`] is held at the edge: turned along it where it runs along
+/// it (the share of it that does), stopped where it goes straight over. Held into the drop for
+/// [`CharacterController::edge_hang_after`], it goes over and climbs down into a hang; a climb
+/// down asked for (backing off) goes over at once.
+fn keep_off_edge(
+    movement: Vec3,
+    time: &Time,
+    move_and_slide: &EnvironmentMoveAndSlide,
+    ctx: &mut CtxItem,
+) -> Vec3 {
+    let Some(safe) = ctx.cfg.safe_drop else {
+        ctx.state.edge_held = None;
+        ctx.state.edge_released = false;
+        return movement;
+    };
+    let climbing_down = ctx
+        .input
+        .climbdown
+        .as_ref()
+        .is_some_and(|t| t.elapsed() <= ctx.cfg.climbdown_input_buffer)
+        && (ctx.cam.is_none() || ctx.input.last_movement.is_some_and(|m| m.y < 0.0));
+    if ctx.input.go_over_edge || !over_drop(movement, safe, move_and_slide, ctx) {
+        ctx.state.edge_held = None;
+        ctx.state.edge_released = false;
+        return movement;
+    }
+    if ctx.state.edge_released {
+        // Going over: the climb down takes hold as the ground goes.
+        ctx.input.climbdown = Some(Stopwatch::new());
+        return movement;
+    }
+    if climbing_down {
+        ctx.state.edge_held = None;
+        return movement;
+    }
+    let held = match ctx.state.edge_held {
+        Some(held) => held + time.delta(),
+        None => {
+            ctx.state.edge_velocity = ctx.velocity.with_y(0.0) - ctx.state.platform_velocity;
+            Duration::ZERO
+        }
+    };
+    if held >= ctx.cfg.edge_hang_after {
+        ctx.state.edge_held = None;
+        ctx.state.edge_released = true;
+        ctx.input.climbdown = Some(Stopwatch::new());
+        return movement;
+    }
+    ctx.state.edge_held = Some(held);
+    // Along the edge: the move turned toward it, the turn that keeps the most of it first.
+    for degrees in [15.0_f32, 30.0, 45.0, 60.0, 75.0] {
+        let turn = degrees.to_radians();
+        for sign in [1.0, -1.0] {
+            let along = Quat::from_rotation_y(sign * turn) * movement * turn.cos();
+            if !over_drop(along, safe, move_and_slide, ctx) {
+                return along;
+            }
+        }
+    }
+    Vec3::ZERO
+}
+
+/// Whether the character moved by `movement` stands over a drop deeper than `safe`: nothing
+/// that deep under the middle of its soles. Its middle, not its whole shape: a body stops with
+/// its toes over the edge, not standing on its heel's rim with the rest of it over the drop.
+fn over_drop(
+    movement: Vec3,
+    safe: f32,
+    move_and_slide: &EnvironmentMoveAndSlide,
+    ctx: &mut CtxItem,
+) -> bool {
+    const PROBE: f32 = 0.05;
+    let collider = ctx.derived.collider(&ctx.state);
+    let aabb = collider.aabb(Vec3::ZERO, Rotation::default(), 0.0);
+    let soles = ctx.transform.translation + movement + Vec3::Y * (aabb.min.y + PROBE);
+    move_and_slide
+        .cast_move(
+            &Collider::sphere(PROBE),
+            soles,
+            Quat::IDENTITY,
+            Vec3::NEG_Y * safe,
+            ctx.cfg.move_and_slide.skin_width,
+            &ctx.cfg.filter,
+        )
+        .is_none()
 }
 
 fn ground_accelerate(wish_velocity: Vec3, acceleration_hz: f32, time: &Time, ctx: &mut CtxItem) {
@@ -1427,6 +1531,17 @@ fn handle_jump(
             if ctx.state.wall_run.is_none() {
                 ctx.state.wall_run = wall_run_ahead(wish_velocity, time, move_and_slide, ctx);
             }
+            // Held at an edge a moment ago: the jump leaves with the run it was making.
+            if ctx
+                .state
+                .edge_held
+                .is_some_and(|held| held <= ctx.cfg.coyote_time)
+            {
+                let run = ctx.state.edge_velocity + ctx.state.platform_velocity;
+                ctx.velocity.x = run.x;
+                ctx.velocity.z = run.z;
+            }
+            ctx.state.edge_held = None;
             set_grounded(None, colliders, time, ctx);
             // set last_ground to coyote time to make it not jump again after jumping ungrounds us
             ctx.state.last_ground.set_elapsed(ctx.cfg.coyote_time);

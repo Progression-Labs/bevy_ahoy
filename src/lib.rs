@@ -206,6 +206,14 @@ pub struct CharacterController {
     /// How long after a jump up off a ledge no ledge is taken hold of: the rise that carries
     /// the hands past the one just left, to the next hold up. Zero takes hold at once.
     pub ledge_jump_regrab: Duration,
+    /// The deepest drop a walk goes over an edge into (m). A ground move that would leave the
+    /// character over a deeper one is held at the edge, sliding along it where the move runs
+    /// along it; a move held into the drop for [`Self::edge_hang_after`] climbs down over the
+    /// edge into a hang, and a climb down asked for (backing off) goes at once. A jump is not a
+    /// walk and is never held. `None` walks off any edge.
+    pub safe_drop: Option<f32>,
+    /// How long a move is held into a drop at an edge before it climbs down over it.
+    pub edge_hang_after: Duration,
 }
 
 impl Default for CharacterController {
@@ -269,6 +277,8 @@ impl Default for CharacterController {
             wall_run_height: 0.0,
             wall_run_speed: 0.0,
             ledge_jump_regrab: Duration::ZERO,
+            safe_drop: None,
+            edge_hang_after: Duration::from_millis(500),
         }
     }
 }
@@ -366,6 +376,16 @@ pub struct CharacterControllerState {
     pub last_wall_run: Stopwatch,
     /// Since the last jump up off a ledge.
     pub last_ledge_jump: Stopwatch,
+    /// How long a move has been held at an edge over a drop deeper than
+    /// [`CharacterController::safe_drop`], if it is.
+    pub edge_held: Option<Duration>,
+    /// The ground velocity the character had as it was first held at an edge: a jump within
+    /// [`CharacterController::coyote_time`] of that leaves with it, so a press a frame late at a
+    /// run's take-off still leaps.
+    pub edge_velocity: Vec3,
+    /// A move held into a drop long enough to go over it: it walks off on its next moves, and
+    /// climbs down as it leaves the ground.
+    pub edge_released: bool,
     /// The current state of the mantle, if a mantle is in progress.
     ///
     /// This is [`None`] if a mantle is not in progress.
@@ -389,6 +409,9 @@ impl Default for CharacterControllerState {
             wall_run: None,
             last_wall_run: max_stopwatch(),
             last_ledge_jump: max_stopwatch(),
+            edge_held: None,
+            edge_velocity: Vec3::ZERO,
+            edge_released: false,
             mantle: None,
         }
     }

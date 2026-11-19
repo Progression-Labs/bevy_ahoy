@@ -107,6 +107,10 @@ pub struct AccumulatedInput {
     pub craned: Option<Stopwatch>,
     pub mantled: Option<Stopwatch>,
     pub climbdown: Option<Stopwatch>,
+    /// Whether any frame since the last fixed update loop meant the move to go over an edge it
+    /// would otherwise be held at ([`CharacterController::safe_drop`]): a run off a roof into
+    /// the reach of what the hands take (a line to slide).
+    pub go_over_edge: bool,
 }
 
 fn apply_movement(
@@ -239,6 +243,7 @@ fn clear_accumulated_input(mut accumulated_inputs: Query<&mut AccumulatedInput>)
             mantled: accumulated_input.mantled.clone(),
             crouched: default(),
             climbdown: accumulated_input.climbdown.clone(),
+            go_over_edge: default(),
         }
     }
 }
