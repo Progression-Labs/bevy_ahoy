@@ -310,7 +310,7 @@ fn ground_move(
     let mut movement = ctx.velocity.0 * time.delta_secs();
     movement.y = 0.0;
 
-    let kept = keep_off_edge(movement, time, move_and_slide, ctx);
+    let kept = keep_off_edge(movement, wish_velocity, time, move_and_slide, ctx);
     if kept != movement {
         let dt = time.delta_secs().max(1.0e-6);
         ctx.velocity.x = kept.x / dt;
@@ -346,6 +346,7 @@ fn ground_move(
 /// down asked for (backing off) goes over at once.
 fn keep_off_edge(
     movement: Vec3,
+    wish_velocity: Vec3,
     time: &Time,
     move_and_slide: &EnvironmentMoveAndSlide,
     ctx: &mut CtxItem,
@@ -361,7 +362,16 @@ fn keep_off_edge(
         .as_ref()
         .is_some_and(|t| t.elapsed() <= ctx.cfg.climbdown_input_buffer)
         && (ctx.cam.is_none() || ctx.input.last_movement.is_some_and(|m| m.y < 0.0));
-    if ctx.input.go_over_edge || !over_drop(movement, safe, move_and_slide, ctx) {
+    let over = over_drop(movement, safe, move_and_slide, ctx);
+    // Held a tick ago, the move was turned along the edge, and the turned move is over no drop:
+    // while the move asked for still goes over, the hold goes on (its clock toward the hang, and
+    // the run it keeps for a jump), or a jump pressed a moment into it leaves along the edge.
+    let asked = wish_velocity.with_y(0.0).normalize_or_zero() * movement.length();
+    let still_asked = !over
+        && ctx.state.edge_held.is_some()
+        && asked != Vec3::ZERO
+        && over_drop(asked, safe, move_and_slide, ctx);
+    if ctx.input.go_over_edge || !(over || still_asked) {
         ctx.state.edge_held = None;
         ctx.state.edge_released = false;
         return movement;
@@ -389,6 +399,9 @@ fn keep_off_edge(
         return movement;
     }
     ctx.state.edge_held = Some(held);
+    if !over {
+        return movement;
+    }
     // Along the edge: the move turned toward it, the turn that keeps the most of it first.
     for degrees in [15.0_f32, 30.0, 45.0, 60.0, 75.0] {
         let turn = degrees.to_radians();
