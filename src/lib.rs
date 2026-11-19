@@ -436,8 +436,9 @@ pub struct CharacterControllerState {
     /// The crane in progress is a run going over an obstacle: how fast it lifts (m/s), and the
     /// run's own move goes on toward the face while it does.
     pub run_over: Option<f32>,
-    /// In the air from the character's own jump off the ground, since it last stood.
-    pub jumped: bool,
+    /// In the air from the character's own jump off the ground, since it last stood: the height
+    /// of its soles as it left (m), so a ledge caught unasked is one the jump could have reached.
+    pub jumped_from: Option<f32>,
     /// The current state of the mantle, if a mantle is in progress.
     ///
     /// This is [`None`] if a mantle is not in progress.
@@ -465,7 +466,7 @@ impl Default for CharacterControllerState {
             edge_velocity: Vec3::ZERO,
             edge_released: false,
             run_over: None,
-            jumped: false,
+            jumped_from: None,
             mantle: None,
         }
     }

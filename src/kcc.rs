@@ -166,7 +166,7 @@ fn run_kcc(
         if ctx.state.grounded.is_some() {
             ctx.velocity.y = ctx.state.platform_velocity.y;
             ctx.state.last_ground.reset();
-            ctx.state.jumped = false;
+            ctx.state.jumped_from = None;
         } else {
             ctx.state.edge_held = None;
             ctx.state.edge_released = false;
@@ -747,7 +747,7 @@ fn handle_crane_movement(
             ctx.transform.translation += cast_dir * speed * time.delta_secs();
             depenetrate_character(move_and_slide, ctx);
             ctx.state.crane_height_left = None;
-            stand_after_crane(ctx);
+            stand_after_crane(move_and_slide, ctx);
         }
         return;
     }
@@ -761,15 +761,37 @@ fn handle_crane_movement(
     ctx.transform.translation += cast_dir * speed * time.delta_secs();
     depenetrate_character(move_and_slide, ctx);
     ctx.state.crane_height_left = None;
-    stand_after_crane(ctx);
+    stand_after_crane(move_and_slide, ctx);
 }
 
-/// A climb over a ledge ends standing on it: the planar speed its wish built while the lift held
-/// it at the wall is not a run it was making (after a pull up from a hang the capsule slid 0.4 m
-/// on over the roof with nothing pressed, ahead of the body standing up). A run going over an
-/// obstacle keeps its own.
-fn stand_after_crane(ctx: &mut CtxItem) {
-    if ctx.state.run_over.is_none() {
+/// A climb over a ledge that ends standing on it ends at rest there: the planar speed its wish
+/// built while the lift held it at the wall is not a run it was making (after a pull up from a
+/// hang the capsule slid 0.4 m on over the roof with nothing pressed, ahead of the body standing
+/// up), and a run on starts from rest. One that ends on the ledge's lip, the middle of its soles
+/// still over the wall, keeps its speed to step on (stopped there, it fell back down the face).
+/// A run going over an obstacle keeps its own speed.
+fn stand_after_crane(move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut CtxItem) {
+    if ctx.state.run_over.is_some() || std::env::var_os("NO_STAND").is_some() {
+        return;
+    }
+    const PROBE: f32 = 0.05;
+    let collider = ctx.derived.collider(&ctx.state);
+    let aabb = collider.aabb(Vec3::ZERO, Rotation::default(), 0.0);
+    let soles = ctx.transform.translation + Vec3::Y * (aabb.min.y + PROBE);
+    let on_top = move_and_slide
+        .cast_move(
+            &Collider::sphere(PROBE),
+            soles,
+            Quat::IDENTITY,
+            Vec3::NEG_Y * (ctx.cfg.step_size + 2.0 * ctx.cfg.move_and_slide.skin_width),
+            ctx.cfg.move_and_slide.skin_width,
+            &ctx.cfg.filter,
+        )
+        .is_some();
+    if std::env::var_os("AHOY_TRACE").is_some() {
+        eprintln!("STAND at {:?} v {:?} on_top {on_top}", ctx.transform.translation, ctx.velocity.0);
+    }
+    if on_top {
         let platform = ctx.state.platform_velocity;
         ctx.velocity.x = platform.x;
         ctx.velocity.z = platform.z;
@@ -906,13 +928,22 @@ fn calc_climb_factor(ctx: &CtxItem, wish_velocity: Vec3, wall_normal: Dir3) -> f
 
 /// Whether a ledge met in the air is taken unasked: the character's own jump, the move into
 /// the wall ([`available_ledge_height`] and [`available_mantle_height`] look along it), and an
-/// input that lets it.
+/// input that lets it. Only a ledge the jump could have reached ([`within_jump`]).
 fn catching(ctx: &CtxItem) -> bool {
     ctx.cfg.catch_after_jump
         && ctx.input.parkour
-        && ctx.state.jumped
+        && ctx.state.jumped_from.is_some()
         && ctx.state.grounded.is_none()
         && ctx.input.last_movement.is_some()
+}
+
+/// Whether a ledge whose top is at `top` (m) is within the reach of the jump the character is in:
+/// no higher over its take-off than the jump's own height. A ledge over that is climbed when the
+/// climb is asked, never caught by a tap.
+fn within_jump(ctx: &CtxItem, top: f32) -> bool {
+    ctx.state
+        .jumped_from
+        .is_some_and(|from| top - from <= ctx.cfg.jump_height)
 }
 
 /// A run at a wall over the step and under [`CharacterController::run_over_height`], with room
@@ -985,8 +1016,13 @@ fn update_crane_state(
         return;
     }
 
-    let Some(crane_height) = available_crane_height(wish_velocity, time, move_and_slide, ctx)
-    else {
+    let crane = available_crane_height(wish_velocity, time, move_and_slide, ctx).filter(|h| {
+        asked || {
+            let soles = ctx.transform.translation.y + ctx.derived.pos_to_feet_dist(&ctx.state);
+            within_jump(ctx, soles + h - 2.0 * ctx.cfg.move_and_slide.skin_width)
+        }
+    });
+    let Some(crane_height) = crane else {
         ctx.state.crane_height_left = None;
         // A ledge over the crane's reach that a jump and the catch at its top still get to is
         // jumped at: whoever holds "up" at a wall means to go up it. A wall with no ledge in
@@ -1210,6 +1246,9 @@ fn update_mantle_state(
     else {
         return;
     };
+    if !asked && !within_jump(ctx, mantle_output.ledge_position.y) {
+        return;
+    }
 
     ctx.input.craned = None;
     ctx.input.mantled = None;
@@ -1795,7 +1834,8 @@ fn handle_jump(
                 ctx.velocity.z = run.z;
             }
             ctx.state.edge_held = None;
-            ctx.state.jumped = true;
+            ctx.state.jumped_from =
+                Some(ctx.transform.translation.y + ctx.derived.pos_to_feet_dist(&ctx.state));
             set_grounded(None, colliders, time, ctx);
             // set last_ground to coyote time to make it not jump again after jumping ungrounds us
             ctx.state.last_ground.set_elapsed(ctx.cfg.coyote_time);
