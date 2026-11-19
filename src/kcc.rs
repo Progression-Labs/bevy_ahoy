@@ -405,6 +405,9 @@ fn keep_off_edge(
 /// Whether the character moved by `movement` stands over a drop deeper than `safe`: nothing
 /// that deep under the middle of its soles. Its middle, not its whole shape: a body stops with
 /// its toes over the edge, not standing on its heel's rim with the rest of it over the drop.
+/// A crack narrower than its footprint is no drop: where the ground goes on within a footprint's
+/// width ahead, within a step up or down, the body spans the crack and walks over it (a gap
+/// between two roofs, a gutter) instead of being held at it.
 fn over_drop(
     movement: Vec3,
     safe: f32,
@@ -415,16 +418,27 @@ fn over_drop(
     let collider = ctx.derived.collider(&ctx.state);
     let aabb = collider.aabb(Vec3::ZERO, Rotation::default(), 0.0);
     let soles = ctx.transform.translation + movement + Vec3::Y * (aabb.min.y + PROBE);
-    move_and_slide
-        .cast_move(
-            &Collider::sphere(PROBE),
-            soles,
-            Quat::IDENTITY,
-            Vec3::NEG_Y * safe,
-            ctx.cfg.move_and_slide.skin_width,
-            &ctx.cfg.filter,
-        )
-        .is_none()
+    let ground_under = |at: Vec3, depth: f32| {
+        move_and_slide
+            .cast_move(
+                &Collider::sphere(PROBE),
+                at,
+                Quat::IDENTITY,
+                Vec3::NEG_Y * depth,
+                ctx.cfg.move_and_slide.skin_width,
+                &ctx.cfg.filter,
+            )
+            .is_some()
+    };
+    if ground_under(soles, safe) {
+        return false;
+    }
+    let width = (aabb.max.x - aabb.min.x).min(aabb.max.z - aabb.min.z);
+    let ahead = movement.with_y(0.0).normalize_or_zero() * (width - PROBE);
+    // Looked for from a step up, so a far side up to a step higher is found too.
+    let lift = Vec3::Y * ctx.cfg.step_size;
+    ahead == Vec3::ZERO
+        || !ground_under(soles + ahead + lift, ctx.cfg.step_size + ctx.cfg.step_down_size)
 }
 
 fn ground_accelerate(wish_velocity: Vec3, acceleration_hz: f32, time: &Time, ctx: &mut CtxItem) {
