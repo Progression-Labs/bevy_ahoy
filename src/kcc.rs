@@ -747,6 +747,7 @@ fn handle_crane_movement(
             ctx.transform.translation += cast_dir * speed * time.delta_secs();
             depenetrate_character(move_and_slide, ctx);
             ctx.state.crane_height_left = None;
+            stand_after_crane(ctx);
         }
         return;
     }
@@ -760,6 +761,19 @@ fn handle_crane_movement(
     ctx.transform.translation += cast_dir * speed * time.delta_secs();
     depenetrate_character(move_and_slide, ctx);
     ctx.state.crane_height_left = None;
+    stand_after_crane(ctx);
+}
+
+/// A climb over a ledge ends standing on it: the planar speed its wish built while the lift held
+/// it at the wall is not a run it was making (after a pull up from a hang the capsule slid 0.4 m
+/// on over the roof with nothing pressed, ahead of the body standing up). A run going over an
+/// obstacle keeps its own.
+fn stand_after_crane(ctx: &mut CtxItem) {
+    if ctx.state.run_over.is_none() {
+        let platform = ctx.state.platform_velocity;
+        ctx.velocity.x = platform.x;
+        ctx.velocity.z = platform.z;
+    }
 }
 
 fn handle_mantle_movement(
