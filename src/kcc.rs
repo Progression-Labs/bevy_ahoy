@@ -954,6 +954,12 @@ fn update_run_over(
     if height <= ctx.cfg.step_size + 2.0 * ctx.cfg.move_and_slide.skin_width {
         return;
     }
+    // Onto a top the body stands on: its whole footprint on past the face, at about the top's
+    // height. The ledge check asks for less room than a body is wide, and over a rail with a
+    // wall half a metre behind it the run went over and down into the slot.
+    if !top_to_stand_on(into, wall.distance, height, move_and_slide, ctx) {
+        return;
+    }
     // Up by the time the run has come to the face: at least a tick's worth of the run.
     let to_face = wall.distance.max(approach * time.delta_secs());
     ctx.state.run_over = Some((approach * height / to_face).max(ctx.cfg.crane_speed));
@@ -963,6 +969,40 @@ fn update_run_over(
     ctx.input.jumped = None;
     ctx.input.mantled = None;
     ctx.input.tac = None;
+}
+
+/// Whether there is a top to stand on `height` up past a face `to_face` ahead along `into`: the
+/// body lifted clear of it and moved on by the face and its own footprint has room there, with
+/// walkable ground within the step of that height under the middle of its soles.
+fn top_to_stand_on(
+    into: Dir3,
+    to_face: f32,
+    height: f32,
+    move_and_slide: &EnvironmentMoveAndSlide,
+    ctx: &mut CtxItem,
+) -> bool {
+    let original = ctx.transform.translation;
+    let collider = ctx.derived.collider(&ctx.state);
+    let aabb = collider.aabb(Vec3::ZERO, Rotation::default(), 0.0);
+    let footprint = (aabb.max.x - aabb.min.x).max(aabb.max.z - aabb.min.z);
+    let lift = height + LANDING_CLEARANCE;
+    ctx.transform.translation.y += lift;
+    let on = *into * (to_face + footprint);
+    let clear = cast_move(on, move_and_slide, ctx).is_none();
+    ctx.transform.translation += on;
+    // Under the middle of the soles there, as the edge hold measures standing.
+    const PROBE: f32 = 0.05;
+    let soles = ctx.transform.translation + Vec3::Y * (aabb.min.y + PROBE);
+    ctx.transform.translation = original;
+    let down = move_and_slide.cast_move(
+        &Collider::sphere(PROBE),
+        soles,
+        Quat::IDENTITY,
+        Vec3::NEG_Y * (LANDING_CLEARANCE + ctx.cfg.step_size),
+        ctx.cfg.move_and_slide.skin_width,
+        &ctx.cfg.filter,
+    );
+    clear && down.is_some_and(|hit| hit.normal1.y >= ctx.cfg.min_walk_cos)
 }
 
 fn update_crane_state(
