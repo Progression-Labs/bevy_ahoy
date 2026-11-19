@@ -403,8 +403,11 @@ fn keep_off_edge(
 }
 
 /// Whether the character moved by `movement` stands over a drop deeper than `safe`: nothing
-/// that deep under the middle of its soles. Its middle, not its whole shape: a body stops with
-/// its toes over the edge, not standing on its heel's rim with the rest of it over the drop.
+/// that deep under the middle of its soles, nor a footprint further along the move. Its middle,
+/// not its whole shape: a body stops with its toes over the edge, not standing on its heel's rim
+/// with the rest of it over the drop. A footprint on: a crack narrower than the soles (between
+/// two roofs, over a gutter) is stepped over, not a drop, though the middle of the soles passes
+/// over nothing.
 fn over_drop(
     movement: Vec3,
     safe: f32,
@@ -415,16 +418,25 @@ fn over_drop(
     let collider = ctx.derived.collider(&ctx.state);
     let aabb = collider.aabb(Vec3::ZERO, Rotation::default(), 0.0);
     let soles = ctx.transform.translation + movement + Vec3::Y * (aabb.min.y + PROBE);
-    move_and_slide
-        .cast_move(
-            &Collider::sphere(PROBE),
-            soles,
-            Quat::IDENTITY,
-            Vec3::NEG_Y * safe,
-            ctx.cfg.move_and_slide.skin_width,
-            &ctx.cfg.filter,
-        )
-        .is_none()
+    let footprint = (aabb.max.x - aabb.min.x).min(aabb.max.z - aabb.min.z);
+    let ground_under = |at: Vec3| {
+        move_and_slide
+            .cast_move(
+                &Collider::sphere(PROBE),
+                at,
+                Quat::IDENTITY,
+                Vec3::NEG_Y * safe,
+                ctx.cfg.move_and_slide.skin_width,
+                &ctx.cfg.filter,
+            )
+            .is_some()
+    };
+    if ground_under(soles) {
+        return false;
+    }
+    // The probe's own reach included: ground that far on is under the soles' front edge.
+    let along = movement.with_y(0.0).normalize_or_zero();
+    along == Vec3::ZERO || !ground_under(soles + along * (footprint - PROBE))
 }
 
 fn ground_accelerate(wish_velocity: Vec3, acceleration_hz: f32, time: &Time, ctx: &mut CtxItem) {
