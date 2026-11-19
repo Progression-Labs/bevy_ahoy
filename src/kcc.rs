@@ -892,7 +892,8 @@ fn calc_climb_factor(ctx: &CtxItem, wish_velocity: Vec3, wall_normal: Dir3) -> f
 
 /// Whether a ledge met in the air is taken unasked: the character's own jump, the move into
 /// the wall ([`available_ledge_height`] and [`available_mantle_height`] look along it), and an
-/// input that lets it. Only a ledge the jump could have reached ([`within_jump`]).
+/// input that lets it. Hung from wherever the hands reach it (the mantle's own reach); stood on
+/// only if the jump could have reached its top ([`within_jump`]).
 fn catching(ctx: &CtxItem) -> bool {
     ctx.cfg.catch_after_jump
         && ctx.input.parkour
@@ -1279,9 +1280,6 @@ fn update_mantle_state(
     else {
         return;
     };
-    if !asked && !within_jump(ctx, mantle_output.ledge_position.y) {
-        return;
-    }
 
     ctx.input.craned = None;
     ctx.input.mantled = None;
