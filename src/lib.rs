@@ -176,6 +176,10 @@ pub struct CharacterController {
     pub gravity: f32,
     pub water_gravity: f32,
     pub step_size: f32,
+    /// How far below its feet a character walking on the ground is kept on it (m): a drop this
+    /// deep under the next stride is snapped down, not fallen. Apart from [`Self::step_size`]:
+    /// how high a body steps up and how far it steps down are not the same height.
+    pub step_down_size: f32,
     pub crane_height: f32,
     pub crouch_speed_scale: f32,
     pub speed: f32,
@@ -252,6 +256,7 @@ impl Default for CharacterController {
             gravity: 29.0,
             water_gravity: 2.4,
             step_size: 0.7,
+            step_down_size: 0.7,
             crouch_speed_scale: 1.0 / 3.0,
             speed: 12.0,
             air_speed: 1.5,

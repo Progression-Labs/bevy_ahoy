@@ -1227,7 +1227,7 @@ fn snap_to_ground(move_and_slide: &EnvironmentMoveAndSlide, ctx: &mut CtxItem) {
     let up_dist = hit.map(|h| h.distance).unwrap_or(cast_len);
     let start = ctx.transform.translation + cast_dir * up_dist;
     let cast_dir = Vec3::NEG_Y;
-    let cast_len = up_dist + ctx.cfg.step_size;
+    let cast_len = up_dist + ctx.cfg.step_down_size;
 
     let orig_pos = ctx.transform.translation;
 
