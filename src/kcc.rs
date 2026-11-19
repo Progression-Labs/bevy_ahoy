@@ -443,13 +443,17 @@ fn over_drop(
     let aabb = collider.aabb(Vec3::ZERO, Rotation::default(), 0.0);
     let soles = ctx.transform.translation + movement + Vec3::Y * (aabb.min.y + PROBE);
     let footprint = (aabb.max.x - aabb.min.x).min(aabb.max.z - aabb.min.z);
+    // A drop measured from the ground under the soles: they ride a skin over it, and the cast
+    // stops a skin short of what it meets, so a cast of `safe` alone called a drop of exactly
+    // `safe` deeper (a 4 m roof with a 4 m safe drop was held at and hung from).
+    let reach = safe + 2.0 * ctx.cfg.move_and_slide.skin_width;
     let ground_under = |at: Vec3| {
         move_and_slide
             .cast_move(
                 &Collider::sphere(PROBE),
                 at,
                 Quat::IDENTITY,
-                Vec3::NEG_Y * safe,
+                Vec3::NEG_Y * reach,
                 ctx.cfg.move_and_slide.skin_width,
                 &ctx.cfg.filter,
             )
