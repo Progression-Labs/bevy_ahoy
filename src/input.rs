@@ -111,6 +111,12 @@ pub struct AccumulatedInput {
     /// would otherwise be held at ([`CharacterController::safe_drop`]): a run off a roof into
     /// the reach of what the hands take (a line to slide).
     pub go_over_edge: bool,
+    /// Whether any frame since the last fixed update loop let the controller go over what the
+    /// move meets on its own, unasked: a run over an obstacle under
+    /// [`CharacterController::run_over_height`], a ledge caught after a jump
+    /// ([`CharacterController::catch_after_jump`]). Cleared every loop, so a move whose controls
+    /// are let go of (a carry, a line, a held act) never does.
+    pub parkour: bool,
 }
 
 fn apply_movement(
@@ -244,6 +250,7 @@ fn clear_accumulated_input(mut accumulated_inputs: Query<&mut AccumulatedInput>)
             crouched: default(),
             climbdown: accumulated_input.climbdown.clone(),
             go_over_edge: default(),
+            parkour: default(),
         }
     }
 }

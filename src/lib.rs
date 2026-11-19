@@ -244,6 +244,20 @@ pub struct CharacterController {
     pub safe_drop: Option<f32>,
     /// How long a move is held into a drop at an edge before it climbs down over it.
     pub edge_hang_after: Duration,
+    /// The tallest obstacle a run goes over on its own (m), when its input lets it
+    /// ([`AccumulatedInput::parkour`]): a wall over [`Self::step_size`] and up to this high with
+    /// room to land on its top is climbed at the run's pace, the lift timed to end as the run
+    /// reaches the face, and the run goes on over the top with its speed. Zero (or anything at
+    /// or under the step) is none.
+    pub run_over_height: f32,
+    /// The slowest approach, into the obstacle, a run goes over it from (m/s): slower, the move
+    /// stops at it as a walk does.
+    pub run_over_speed: f32,
+    /// Whether a ledge is caught in the air after the character's own jump while the move is
+    /// into its wall and the input lets it ([`AccumulatedInput::parkour`]), as though the crane
+    /// and mantle were asked: a running jump a little short of a ledge goes up onto it instead
+    /// of sliding down its face. Falls, drops and dives are never caught so.
+    pub catch_after_jump: bool,
 }
 
 impl Default for CharacterController {
@@ -310,6 +324,9 @@ impl Default for CharacterController {
             ledge_jump_regrab: Duration::ZERO,
             safe_drop: None,
             edge_hang_after: Duration::from_millis(500),
+            run_over_height: 0.0,
+            run_over_speed: 0.0,
+            catch_after_jump: false,
         }
     }
 }
@@ -416,6 +433,11 @@ pub struct CharacterControllerState {
     /// A move held into a drop long enough to go over it: it walks off on its next moves, and
     /// climbs down as it leaves the ground.
     pub edge_released: bool,
+    /// The crane in progress is a run going over an obstacle: how fast it lifts (m/s), and the
+    /// run's own move goes on toward the face while it does.
+    pub run_over: Option<f32>,
+    /// In the air from the character's own jump off the ground, since it last stood.
+    pub jumped: bool,
     /// The current state of the mantle, if a mantle is in progress.
     ///
     /// This is [`None`] if a mantle is not in progress.
@@ -442,6 +464,8 @@ impl Default for CharacterControllerState {
             edge_held: None,
             edge_velocity: Vec3::ZERO,
             edge_released: false,
+            run_over: None,
+            jumped: false,
             mantle: None,
         }
     }

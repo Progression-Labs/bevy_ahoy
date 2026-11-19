@@ -117,6 +117,10 @@ fn run_kcc(
 
         let wish_velocity = calculate_wish_velocity(&ctx);
         let wish_velocity_3d = calculate_3d_wish_velocity(&ctx);
+        if ctx.state.crane_height_left.is_none() {
+            ctx.state.run_over = None;
+        }
+        update_run_over(wish_velocity, &time, &move_and_slide, &mut ctx);
         update_crane_state(wish_velocity, &time, &move_and_slide, &mut ctx);
         update_mantle_state(wish_velocity, &time, &move_and_slide, &mut ctx);
         if ctx.state.crane_height_left.is_some() {
@@ -162,6 +166,7 @@ fn run_kcc(
         if ctx.state.grounded.is_some() {
             ctx.velocity.y = ctx.state.platform_velocity.y;
             ctx.state.last_ground.reset();
+            ctx.state.jumped = false;
         } else {
             ctx.state.edge_held = None;
             ctx.state.edge_released = false;
@@ -710,13 +715,17 @@ fn handle_crane_movement(
     }
 
     let cast_dir = Vec3::Y;
-    let cast_len = (ctx.cfg.crane_speed * time.delta_secs()).min(crane_height);
+    let lift_speed = ctx.state.run_over.unwrap_or(ctx.cfg.crane_speed);
+    let cast_len = (lift_speed * time.delta_secs()).min(crane_height);
     let top_hit = cast_move(cast_dir * cast_len, move_and_slide, ctx);
     let travel_dist = top_hit.map(|hit| hit.distance).unwrap_or(cast_len);
 
     ctx.transform.translation += cast_dir * travel_dist;
     let velocity_stash = ctx.velocity.0;
-    **ctx.velocity = ctx.state.platform_velocity;
+    if ctx.state.run_over.is_none() {
+        // A climb holds its place at the wall; a run going over keeps going at it.
+        **ctx.velocity = ctx.state.platform_velocity;
+    }
     move_character(time, move_and_slide, ctx);
     **ctx.velocity = velocity_stash;
 
@@ -877,16 +886,84 @@ fn calc_climb_factor(ctx: &CtxItem, wish_velocity: Vec3, wall_normal: Dir3) -> f
     if movement < 0.0 { -factor } else { factor }
 }
 
+/// Whether a ledge met in the air is taken unasked: the character's own jump, the move into
+/// the wall ([`available_ledge_height`] and [`available_mantle_height`] look along it), and an
+/// input that lets it.
+fn catching(ctx: &CtxItem) -> bool {
+    ctx.cfg.catch_after_jump
+        && ctx.input.parkour
+        && ctx.state.jumped
+        && ctx.state.grounded.is_none()
+        && ctx.input.last_movement.is_some()
+}
+
+/// A run at a wall over the step and under [`CharacterController::run_over_height`], with room
+/// to land on its top, goes over it: a crane whose lift ends as the run reaches the face
+/// ([`CharacterControllerState::run_over`]), so the run loses no time at it.
+fn update_run_over(
+    wish_velocity: Vec3,
+    time: &Time,
+    move_and_slide: &EnvironmentMoveAndSlide,
+    ctx: &mut CtxItem,
+) {
+    if !ctx.input.parkour
+        || ctx.cfg.run_over_height <= ctx.cfg.step_size
+        || ctx.state.grounded.is_none()
+        || ctx.state.crane_height_left.is_some()
+        || ctx.state.mantle.is_some()
+    {
+        return;
+    }
+    let Ok(into) = Dir3::new(wish_velocity.with_y(0.0)) else {
+        return;
+    };
+    let approach = (ctx.velocity.0 - ctx.state.platform_velocity)
+        .with_y(0.0)
+        .dot(*into);
+    if approach < ctx.cfg.run_over_speed {
+        return;
+    }
+    let Some(wall) = cast_move(into * ctx.cfg.min_crane_ledge_space, move_and_slide, ctx) else {
+        return;
+    };
+    let Some(height) = available_ledge_height(
+        wish_velocity,
+        ctx.cfg.min_crane_ledge_space,
+        ctx.cfg.min_crane_cos,
+        ctx.cfg.run_over_height,
+        time,
+        move_and_slide,
+        ctx,
+    ) else {
+        return;
+    };
+    // Under the step's lift (the ledge height carries two skins), the step takes it.
+    if height <= ctx.cfg.step_size + 2.0 * ctx.cfg.move_and_slide.skin_width {
+        return;
+    }
+    // Up by the time the run has come to the face: at least a tick's worth of the run.
+    let to_face = wall.distance.max(approach * time.delta_secs());
+    ctx.state.run_over = Some((approach * height / to_face).max(ctx.cfg.crane_speed));
+    ctx.state.crane_height_left = Some(height);
+    ctx.state.mantle = None;
+    ctx.input.craned = None;
+    ctx.input.jumped = None;
+    ctx.input.mantled = None;
+    ctx.input.tac = None;
+}
+
 fn update_crane_state(
     wish_velocity: Vec3,
     time: &Time,
     move_and_slide: &EnvironmentMoveAndSlide,
     ctx: &mut CtxItem,
 ) {
-    let Some(crane_time) = ctx.input.craned.clone() else {
-        return;
-    };
-    if crane_time.elapsed() > ctx.cfg.crane_input_buffer {
+    let asked = ctx
+        .input
+        .craned
+        .as_ref()
+        .is_some_and(|t| t.elapsed() <= ctx.cfg.crane_input_buffer);
+    if !asked && !catching(ctx) {
         return;
     }
 
@@ -1097,10 +1174,12 @@ fn update_mantle_state(
         return;
     }
 
-    let Some(mantle_time) = ctx.input.mantled.clone() else {
-        return;
-    };
-    if mantle_time.elapsed() > ctx.cfg.mantle_input_buffer {
+    let asked = ctx
+        .input
+        .mantled
+        .as_ref()
+        .is_some_and(|t| t.elapsed() <= ctx.cfg.mantle_input_buffer);
+    if !asked && !catching(ctx) {
         return;
     }
     // A jump up off a ledge is on its way to the next: the one just left is not taken again.
@@ -1698,6 +1777,7 @@ fn handle_jump(
                 ctx.velocity.z = run.z;
             }
             ctx.state.edge_held = None;
+            ctx.state.jumped = true;
             set_grounded(None, colliders, time, ctx);
             // set last_ground to coyote time to make it not jump again after jumping ungrounds us
             ctx.state.last_ground.set_elapsed(ctx.cfg.coyote_time);
