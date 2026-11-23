@@ -485,9 +485,6 @@ impl Default for CharacterControllerState {
 #[derive(Clone, Reflect, Debug)]
 pub struct MantleState {
     pub height_left: f32,
-    /// The height of the top of the ledge the mantle climbs onto, where the probe that found the
-    /// ledge met it (the frame `Transform` is in).
-    pub top: f32,
 }
 
 fn max_stopwatch() -> Stopwatch {
