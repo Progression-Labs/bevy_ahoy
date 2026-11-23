@@ -120,6 +120,7 @@ fn run_kcc(
         if ctx.state.crane_height_left.is_none() {
             ctx.state.run_over = None;
             ctx.state.crane_top = None;
+            ctx.state.crane_wall = None;
         }
         update_run_over(wish_velocity, &time, &move_and_slide, &mut ctx);
         update_crane_state(wish_velocity, &time, &move_and_slide, &mut ctx);
@@ -941,7 +942,11 @@ fn update_run_over(
     let Some(wall) = cast_move(into * ctx.cfg.min_crane_ledge_space, move_and_slide, ctx) else {
         return;
     };
-    let Some(Ledge { height, top }) = available_ledge_height(
+    let Some(Ledge {
+        height,
+        top,
+        wall: face,
+    }) = available_ledge_height(
         wish_velocity,
         ctx.cfg.min_crane_ledge_space,
         ctx.cfg.min_crane_cos,
@@ -949,7 +954,8 @@ fn update_run_over(
         time,
         move_and_slide,
         ctx,
-    ) else {
+    )
+    else {
         return;
     };
     // Under the step's lift (the ledge height carries two skins), the step takes it.
@@ -967,6 +973,7 @@ fn update_run_over(
     ctx.state.run_over = Some((approach * height / to_face).max(ctx.cfg.crane_speed));
     ctx.state.crane_height_left = Some(height);
     ctx.state.crane_top = Some(top);
+    ctx.state.crane_wall = Some(face);
     ctx.state.mantle = None;
     ctx.input.craned = None;
     ctx.input.jumped = None;
@@ -1118,6 +1125,7 @@ fn take_crane(ledge: Ledge, ctx: &mut CtxItem) {
     ctx.state.mantle = None;
     ctx.state.crane_height_left = Some(ledge.height);
     ctx.state.crane_top = Some(ledge.top);
+    ctx.state.crane_wall = Some(ledge.wall);
 }
 
 fn available_crane_height(
@@ -1151,6 +1159,8 @@ struct Ledge {
     height: f32,
     /// The height of its top, where the probe landing on it met it.
     top: f32,
+    /// Its wall's normal over the ground, out of the wall.
+    wall: Vec3,
 }
 
 fn available_ledge_height(
@@ -1259,6 +1269,7 @@ fn available_ledge_height(
     Some(Ledge {
         height: ledge_height,
         top: hit.point1.y,
+        wall: wall_normal,
     })
 }
 
