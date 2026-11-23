@@ -119,8 +119,6 @@ fn run_kcc(
         let wish_velocity_3d = calculate_3d_wish_velocity(&ctx);
         if ctx.state.crane_height_left.is_none() {
             ctx.state.run_over = None;
-            ctx.state.crane_top = None;
-            ctx.state.crane_wall = None;
         }
         update_run_over(wish_velocity, &time, &move_and_slide, &mut ctx);
         update_crane_state(wish_velocity, &time, &move_and_slide, &mut ctx);
@@ -190,7 +188,7 @@ fn carry(
 ) {
     let dt = time.delta_secs().max(1.0e-6);
     ctx.state.mantle = None;
-    ctx.state.crane_height_left = None;
+    end_crane(ctx);
     ctx.state.edge_held = None;
     let from = ctx.transform.translation;
     if delta != Vec3::ZERO {
@@ -694,7 +692,7 @@ fn handle_crane_movement(
     ctx.velocity.0 += ctx.state.platform_velocity;
 
     let Ok((vel_dir, speed)) = Dir3::new_and_length(ctx.velocity.0) else {
-        ctx.state.crane_height_left = None;
+        end_crane(ctx);
         ctx.velocity.0 -= ctx.state.platform_velocity;
         return;
     };
@@ -710,13 +708,13 @@ fn handle_crane_movement(
     let cast_len = ctx.cfg.min_crane_ledge_space;
     let Some(wall_hit) = cast_move(cast_dir * cast_len, move_and_slide, ctx) else {
         // nothing to move onto
-        ctx.state.crane_height_left = None;
+        end_crane(ctx);
         return;
     };
     let wall_normal = vec3(wall_hit.normal1.x, 0.0, wall_hit.normal1.z).normalize_or_zero();
 
     if (-wall_normal).dot(*wish_dir) < ctx.cfg.min_crane_cos {
-        ctx.state.crane_height_left = None;
+        end_crane(ctx);
         return;
     }
 
@@ -748,7 +746,7 @@ fn handle_crane_movement(
         if cast_move(cast_dir * cast_len, move_and_slide, ctx).is_none() {
             ctx.transform.translation += cast_dir * speed * time.delta_secs();
             depenetrate_character(move_and_slide, ctx);
-            ctx.state.crane_height_left = None;
+            end_crane(ctx);
         }
         return;
     }
@@ -756,12 +754,12 @@ fn handle_crane_movement(
     let cast_dir = vel_dir;
     let cast_len = ctx.cfg.min_crane_ledge_space;
     if cast_move(cast_dir * cast_len, move_and_slide, ctx).is_some() {
-        ctx.state.crane_height_left = None;
+        end_crane(ctx);
         return;
     }
     ctx.transform.translation += cast_dir * speed * time.delta_secs();
     depenetrate_character(move_and_slide, ctx);
-    ctx.state.crane_height_left = None;
+    end_crane(ctx);
 }
 
 fn handle_mantle_movement(
@@ -1061,7 +1059,7 @@ fn update_crane_state(
     }
 
     let Some(ledge) = available_crane_height(wish_velocity, time, move_and_slide, ctx) else {
-        ctx.state.crane_height_left = None;
+        end_crane(ctx);
         // A ledge over the crane's reach that a jump and the catch at its top still get to is
         // jumped at: whoever holds "up" at a wall means to go up it. A wall with no ledge in
         // reach is left alone, so holding the crane at one does not bounce.
@@ -1116,6 +1114,14 @@ fn update_crane_state(
 }
 
 /// A crane over `ledge` begins.
+/// The crane ends: what it said of its ledge (the top, the wall) goes with it, so nothing reads
+/// a crane's ledge once it is over.
+fn end_crane(ctx: &mut CtxItem) {
+    ctx.state.crane_height_left = None;
+    ctx.state.crane_top = None;
+    ctx.state.crane_wall = None;
+}
+
 fn take_crane(ledge: Ledge, ctx: &mut CtxItem) {
     ctx.input.craned = None;
     // Ensure we don't immediately jump on the surface if crane and jump are bound to the same key
