@@ -852,6 +852,7 @@ fn handle_mantle_movement(
                 if (there.height_left - mantle_state.height_left).abs() < SHIMMY_STEP =>
             {
                 mantle_state.height_left = there.height_left;
+                mantle_state.top = there.top;
                 ctx.velocity.0 = climbing + shimmied;
             }
             _ => {
@@ -1431,6 +1432,7 @@ fn available_mantle_height(
     Some((
         MantleState {
             height_left: mantle_height,
+            top: hit.point1.y,
         },
         MantleOutput {
             wall_normal,
