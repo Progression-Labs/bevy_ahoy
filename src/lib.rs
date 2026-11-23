@@ -418,6 +418,10 @@ pub struct CharacterControllerState {
     pub last_step_up: Stopwatch,
     pub last_step_down: Stopwatch,
     pub crane_height_left: Option<f32>,
+    /// While a crane is in progress: the height of the top of the ledge it climbs onto, where
+    /// the probe that found the ledge met it (the frame `Transform` is in). Read it rather than
+    /// working it out from [`Self::crane_height_left`], which carries the probe's skins.
+    pub crane_top: Option<f32>,
     /// A run up a wall is asked for: how high the jump at it goes (m), taken by the jump.
     pub wall_run: Option<f32>,
     /// Since the last run up a wall left the ground.
@@ -459,6 +463,7 @@ impl Default for CharacterControllerState {
             last_step_up: max_stopwatch(),
             last_step_down: max_stopwatch(),
             crane_height_left: None,
+            crane_top: None,
             wall_run: None,
             last_wall_run: max_stopwatch(),
             last_ledge_jump: max_stopwatch(),

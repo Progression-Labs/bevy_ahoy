@@ -119,6 +119,7 @@ fn run_kcc(
         let wish_velocity_3d = calculate_3d_wish_velocity(&ctx);
         if ctx.state.crane_height_left.is_none() {
             ctx.state.run_over = None;
+            ctx.state.crane_top = None;
         }
         update_run_over(wish_velocity, &time, &move_and_slide, &mut ctx);
         update_crane_state(wish_velocity, &time, &move_and_slide, &mut ctx);
@@ -940,7 +941,7 @@ fn update_run_over(
     let Some(wall) = cast_move(into * ctx.cfg.min_crane_ledge_space, move_and_slide, ctx) else {
         return;
     };
-    let Some(height) = available_ledge_height(
+    let Some(Ledge { height, top }) = available_ledge_height(
         wish_velocity,
         ctx.cfg.min_crane_ledge_space,
         ctx.cfg.min_crane_cos,
@@ -965,6 +966,7 @@ fn update_run_over(
     let to_face = wall.distance.max(approach * time.delta_secs());
     ctx.state.run_over = Some((approach * height / to_face).max(ctx.cfg.crane_speed));
     ctx.state.crane_height_left = Some(height);
+    ctx.state.crane_top = Some(top);
     ctx.state.mantle = None;
     ctx.input.craned = None;
     ctx.input.jumped = None;
@@ -1036,22 +1038,21 @@ fn update_crane_state(
         if !catching(ctx) || ctx.state.crane_height_left.is_some() || ctx.state.mantle.is_some() {
             return;
         }
-        let Some(height) = available_crane_height(wish_velocity, time, move_and_slide, ctx) else {
+        let Some(ledge) = available_crane_height(wish_velocity, time, move_and_slide, ctx) else {
             return;
         };
         let soles = ctx.transform.translation.y + ctx.derived.pos_to_feet_dist(&ctx.state);
         if !within_jump(
             ctx,
-            soles + height - 2.0 * ctx.cfg.move_and_slide.skin_width,
+            soles + ledge.height - 2.0 * ctx.cfg.move_and_slide.skin_width,
         ) {
             return;
         }
-        take_crane(height, ctx);
+        take_crane(ledge, ctx);
         return;
     }
 
-    let Some(crane_height) = available_crane_height(wish_velocity, time, move_and_slide, ctx)
-    else {
+    let Some(ledge) = available_crane_height(wish_velocity, time, move_and_slide, ctx) else {
         ctx.state.crane_height_left = None;
         // A ledge over the crane's reach that a jump and the catch at its top still get to is
         // jumped at: whoever holds "up" at a wall means to go up it. A wall with no ledge in
@@ -1091,7 +1092,7 @@ fn update_crane_state(
                         ctx,
                     )
                 {
-                    let jump = (ledge - body + WALL_RUN_OVER).clamp(
+                    let jump = (ledge.height - body + WALL_RUN_OVER).clamp(
                         ctx.cfg.jump_height,
                         ctx.cfg.jump_height + ctx.cfg.wall_run_height,
                     );
@@ -1103,11 +1104,11 @@ fn update_crane_state(
         return;
     };
 
-    take_crane(crane_height, ctx);
+    take_crane(ledge, ctx);
 }
 
-/// A crane over a ledge `height` up begins.
-fn take_crane(height: f32, ctx: &mut CtxItem) {
+/// A crane over `ledge` begins.
+fn take_crane(ledge: Ledge, ctx: &mut CtxItem) {
     ctx.input.craned = None;
     // Ensure we don't immediately jump on the surface if crane and jump are bound to the same key
     ctx.input.jumped = None;
@@ -1115,7 +1116,8 @@ fn take_crane(height: f32, ctx: &mut CtxItem) {
     ctx.input.tac = None;
 
     ctx.state.mantle = None;
-    ctx.state.crane_height_left = Some(height);
+    ctx.state.crane_height_left = Some(ledge.height);
+    ctx.state.crane_top = Some(ledge.top);
 }
 
 fn available_crane_height(
@@ -1123,7 +1125,7 @@ fn available_crane_height(
     time: &Time,
     move_and_slide: &EnvironmentMoveAndSlide,
     ctx: &mut CtxItem,
-) -> Option<f32> {
+) -> Option<Ledge> {
     available_ledge_height(
         wish_velocity,
         ctx.cfg.min_crane_ledge_space,
@@ -1142,6 +1144,15 @@ const WALL_RUN_OVER: f32 = 0.25;
 /// How far over a ledge the room to land on it is looked for (m).
 const LANDING_CLEARANCE: f32 = 0.05;
 
+/// A ledge a climb can go over.
+#[derive(Clone, Copy, Debug)]
+struct Ledge {
+    /// How far the body rises to go onto it from where it is (m), two skins over its top.
+    height: f32,
+    /// The height of its top, where the probe landing on it met it.
+    top: f32,
+}
+
 fn available_ledge_height(
     wish_velocity: Vec3,
     min_depth: f32,
@@ -1150,7 +1161,7 @@ fn available_ledge_height(
     time: &Time,
     move_and_slide: &EnvironmentMoveAndSlide,
     ctx: &mut CtxItem,
-) -> Option<f32> {
+) -> Option<Ledge> {
     let original_position = ctx.transform.translation;
     let original_velocity = ctx.velocity.0;
 
@@ -1245,7 +1256,10 @@ fn available_ledge_height(
         return None;
     }
 
-    Some(ledge_height)
+    Some(Ledge {
+        height: ledge_height,
+        top: hit.point1.y,
+    })
 }
 
 fn update_mantle_state(
@@ -1941,7 +1955,7 @@ fn wall_run_ahead(
     let jump = match ledge(ctx, reach) {
         Some(_) => None,
         None => ledge(ctx, reach + ctx.cfg.wall_run_height).map(|ledge| {
-            (ledge - body + WALL_RUN_OVER).clamp(
+            (ledge.height - body + WALL_RUN_OVER).clamp(
                 ctx.cfg.jump_height,
                 ctx.cfg.jump_height + ctx.cfg.wall_run_height,
             )
